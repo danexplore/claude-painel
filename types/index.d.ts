@@ -21,6 +21,8 @@ export type Activity = {
   sql?: string
   isMcp?: true
   file?: FileChange
+  files?: FileChange[]
+  gitNote?: string
 }
 
 export type FileChange = { path: string; content?: string; diff?: string }

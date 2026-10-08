@@ -175,6 +175,27 @@ export function patchStat(hunks: readonly PatchHunk[]): string {
   return `+${lines.filter(line => line.startsWith('+')).length} −${lines.filter(line => line.startsWith('-')).length}`
 }
 
+export type GitOperation = {
+  commit?: { sha: string; kind: string; branch?: string }
+  push?: { branch: string }
+  branch?: { ref: string; action: string }
+  pr?: { number: number; action: string }
+}
+
+const PR_ACTION: Record<string, string> = { created: 'aberto', merged: 'mesclado', edited: 'editado', commented: 'comentado', closed: 'fechado' }
+
+/** Uma etiqueta curta do que o comando fez no git: commit, push, merge/rebase, PR. */
+export function gitNote(operation: GitOperation | undefined): string | undefined {
+  if (!operation) return undefined
+  const parts = [
+    operation.commit && `commit ${operation.commit.sha.slice(0, 7)}${operation.commit.branch ? ` · ${operation.commit.branch}` : ''}`,
+    operation.push && `push ${operation.push.branch}`,
+    operation.branch && `${operation.branch.action === 'merged' ? 'merge' : 'rebase'} ${operation.branch.ref}`,
+    operation.pr && `PR #${operation.pr.number} ${PR_ACTION[operation.pr.action] ?? operation.pr.action}`,
+  ].filter(Boolean)
+  return parts.length > 0 ? parts.join(' · ') : undefined
+}
+
 /** O tipo antes de rodar; um Bash que o Claude Code marcar como somente leitura vira leitura depois. */
 export function settleCategory(category: ActivityCategory, isReadOnly: boolean): ActivityCategory {
   return category === 'action' && isReadOnly ? 'read' : category

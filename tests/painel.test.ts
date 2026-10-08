@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { classifyShell, classifyToolCall, isBookkeeping, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
+import { classifyShell, classifyToolCall, gitNote, isBookkeeping, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
 import { bar, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
 import { activityItems, fitSegments, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
@@ -89,6 +89,12 @@ describe('classificação de comandos', () => {
   test('patch do Edit vira diff com a linha real', async () => {
     const hunks = [{ oldStart: 181, oldLines: 2, newStart: 181, newLines: 3, lines: [' x', '+novo', ' y'] }]
     expect([patchDiff(hunks), patchStat(hunks)]).toEqual(['@@ -181,2 +181,3 @@\n x\n+novo\n y', '+1 −0'])
+  })
+
+  test('commit e push viram uma etiqueta curta', async () => {
+    expect(gitNote({ commit: { sha: 'abcdef1234', kind: 'committed', branch: 'main' }, push: { branch: 'main' } })).toBe(
+      'commit abcdef1 · main · push main',
+    )
   })
 
   test('Write guarda o conteúdo escrito', async () => {
@@ -449,5 +455,24 @@ test('diff do Edit usa o patch devolvido pela ferramenta', async ($, on) => {
   await ui.press({ key: 'open-p1' })
   const code = await ui.find({ type: 'Code' })
   expect(JSON.stringify(code)).toContain('@@ -40,1 +40,1 @@')
+  await ui.unmount()
+})
+
+test('Bash que muda arquivo vira edição e mostra o diff do arquivo', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('tool.call', () => ({
+    result: {
+      stdout: 'ok',
+      stderr: '',
+      interrupted: false,
+      bashEditDiff: { files: [{ filePath: '/x/plugin.json', hunks: [{ oldStart: 3, oldLines: 1, newStart: 3, newLines: 1, lines: ['-"0.7.0"', '+"0.7.1"'] }] }] },
+    },
+    text: 'ok',
+  }))
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'b1', command: "sed -i 's/0.7.0/0.7.1/' plugin.json", description: 'Sobe a versão' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'open-b1' })
+  const code = await ui.find({ type: 'Code' })
+  expect(JSON.stringify(code)).toContain('@@ -3,1 +3,1 @@')
   await ui.unmount()
 })

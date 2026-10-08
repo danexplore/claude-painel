@@ -1,6 +1,8 @@
 import type { Elements, RenderNode } from 'claude-code'
 
-import type { Activity } from '../../types'
+import type { Activity, FileChange } from '../../types'
+import { changesOf, diffCounts, homePath } from '../lib/files'
+import { truncate } from '../lib/format'
 import {
   COLUMN_GAP,
   MAX_ROWS,
@@ -15,7 +17,17 @@ import {
 
 export type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button' | 'Code' | 'Markdown'>
 
-export type DetailOptions = { width: number; previewLines: number; isFull: boolean; onShowAll: () => void }
+export type DetailOptions = {
+  width: number
+  previewLines: number
+  isFull: boolean
+  onShowAll: () => void
+  /** Na aba Arquivos: mostra só a troca deste arquivo, mesmo que o comando tenha mudado vários. */
+  onlyPath?: string
+  home?: string
+}
+
+const TREE = '⎿ '
 
 const GAP = ' '.repeat(COLUMN_GAP)
 
@@ -118,66 +130,91 @@ function mcpOutput(kit: Kit, entry: Activity, options: DetailOptions): RenderNod
   )
 }
 
-function plainOutput(kit: Kit, entry: Activity, options: DetailOptions): RenderNode {
-  const { Box, Text } = kit
-  if (!entry.output) return <Text dimColor>(sem saída)</Text>
-  const { text, total } = limitLines(entry.output, options)
+function fileDiff(kit: Kit, id: string, file: FileChange, options: DetailOptions): RenderNode {
+  const { Box, Text, Code, Markdown } = kit
+  const isMarkdown = /\.(?:md|mdx|markdown)$/i.test(file.path)
+  const { text, total } = file.diff !== undefined ? limitHunks(file.diff, options) : limitLines(file.content ?? '', options)
+  const counts = file.diff !== undefined ? diffCounts(file.diff) : undefined
+  const verb = file.diff !== undefined ? 'Atualizou' : 'Criou'
+  const stat = counts ? `(+${counts.added} −${counts.removed})` : `(${total} linhas)`
   return (
-    <Box flexDirection="column">
-      <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
-        <Text color={entry.status === 'error' ? 'error' : undefined}>{text}</Text>
+    <Box key={`${id}-${file.path}`} flexDirection="column">
+      <Box>
+        <Text dimColor>{TREE}</Text>
+        <Text>{verb} </Text>
+        <Text bold>{homePath(file.path, options.home)}</Text>
+        <Text dimColor> {stat}</Text>
       </Box>
-      {!options.isFull && total > options.previewLines && showAllButton(kit, entry.id, `ver tudo · ${total} linhas`, options)}
+      <Box flexDirection="column" paddingLeft={2}>
+        {file.diff !== undefined ? (
+          <Code source={text} format="diff" path={file.path} wrap="wrap" />
+        ) : isMarkdown ? (
+          <Markdown text={text} />
+        ) : (
+          <Code source={text} path={file.path} wrap="wrap" />
+        )}
+        {!options.isFull && total > options.previewLines && showAllButton(kit, `${id}-${file.path}`, `… +${total - options.previewLines} linhas · ver tudo`, options)}
+      </Box>
     </Box>
   )
 }
 
-function fileChangeView(kit: Kit, entry: Activity, options: DetailOptions): RenderNode {
-  const { Box, Text, Code, Markdown } = kit
-  const file = entry.file!
-  const isMarkdown = /\.(?:md|mdx|markdown)$/i.test(file.path)
-  const body = file.diff ?? file.content ?? ''
-  const { text, total } = file.diff !== undefined ? limitHunks(file.diff, options) : limitLines(body, options)
+/** A saída como o Claude Code mostra: `⎿` na primeira linha, recuo nas outras, sem caixa. */
+function treeOutput(kit: Kit, entry: Activity, options: DetailOptions): RenderNode {
+  const { Box, Text } = kit
+  const output = (entry.output ?? '').replace(/\s+$/, '')
+  if (!output) return <Text dimColor>{TREE}(sem saída)</Text>
+  const { text, total } = limitLines(output, options)
+  const lines = text.split('\n')
+  const isError = entry.status === 'error'
   return (
     <Box flexDirection="column">
-      <Text dimColor>{file.path}</Text>
-      {file.diff !== undefined ? (
-        <Code source={text} format="diff" path={file.path} wrap="wrap" />
-      ) : isMarkdown ? (
-        <Markdown text={text} />
-      ) : (
-        <Code source={text} path={file.path} wrap="wrap" />
-      )}
-      {!options.isFull && total > options.previewLines && showAllButton(kit, entry.id, `ver tudo · ${total} linhas`, options)}
-      {entry.status === 'error' && <Text color="error">{entry.output}</Text>}
+      {lines.map((line, index) => (
+        <Box key={`${entry.id}-out-${index}`}>
+          <Text dimColor>{index === 0 ? TREE : '  '}</Text>
+          <Text color={isError ? 'error' : undefined} dimColor={!isError}>
+            {line}
+          </Text>
+        </Box>
+      ))}
+      {!options.isFull && total > options.previewLines && showAllButton(kit, entry.id, `  … +${total - options.previewLines} linhas · ver tudo`, options)}
     </Box>
   )
+}
+
+/** O comando numa linha só, cortado; inteiro com cores quando a saída é vista toda. */
+function commandLine(kit: Kit, entry: Activity, options: DetailOptions): RenderNode {
+  const { Text, Code } = kit
+  if (options.isFull && (entry.detail.includes('\n') || entry.detail.length > options.width)) {
+    return <Code source={entry.detail} language="bash" wrap="wrap" />
+  }
+  return <Text dimColor>$ {truncate(entry.detail.split('\n')[0]!, Math.max(8, options.width - 2))}</Text>
 }
 
 function request(kit: Kit, entry: Activity, options: DetailOptions): RenderNode {
-  const { Text, Code } = kit
+  const { Code } = kit
   if (entry.sql) return <Code source={entry.sql.trim()} language="sql" wrap="wrap" />
   if (entry.isMcp) return <Code source={limitLines(entry.detail, { ...options, isFull: false }).text} language="json" wrap="wrap" />
-  if (entry.detail.includes('\n') || entry.detail.length > options.width) {
-    return <Code source={limitLines(entry.detail, { ...options, isFull: false }).text} language="bash" wrap="wrap" />
-  }
-  return <Text dimColor>{entry.detail}</Text>
+  return commandLine(kit, entry, options)
 }
 
 /** O que aparece ao expandir uma chamada: o pedido (query, comando, argumentos) e a resposta. */
 export function entryDetail(kit: Kit, entry: Activity, options: DetailOptions): RenderNode {
-  const { Box } = kit
+  const { Box, Text } = kit
+  const files = changesOf(entry).filter(file => !options.onlyPath || file.path === options.onlyPath)
   if (entry.file) {
     return (
       <Box key={`${entry.id}-detail`} flexDirection="column" paddingBottom={1}>
-        {fileChangeView(kit, entry, options)}
+        {files.map(file => fileDiff(kit, entry.id, file, options))}
+        {entry.status === 'error' && <Text color="error">{entry.output}</Text>}
       </Box>
     )
   }
   return (
-    <Box key={`${entry.id}-detail`} flexDirection="column" paddingBottom={1} gap={1}>
+    <Box key={`${entry.id}-detail`} flexDirection="column" paddingBottom={1}>
       {request(kit, entry, options)}
-      {entry.isMcp ? mcpOutput(kit, entry, options) : plainOutput(kit, entry, options)}
+      {entry.isMcp ? mcpOutput(kit, entry, options) : treeOutput(kit, entry, options)}
+      {files.map(file => fileDiff(kit, entry.id, file, options))}
     </Box>
   )
 }

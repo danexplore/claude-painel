@@ -1,4 +1,4 @@
-import type { Activity } from '../../types'
+import type { Activity, FileChange } from '../../types'
 
 export type FileSummary = {
   path: string
@@ -9,7 +9,7 @@ export type FileSummary = {
   lastAt: number
 }
 
-function diffCounts(diff: string): { added: number; removed: number } {
+export function diffCounts(diff: string): { added: number; removed: number } {
   const lines = diff.split('\n').filter(line => !line.startsWith('@@'))
   return {
     added: lines.filter(line => line.startsWith('+')).length,
@@ -17,22 +17,28 @@ function diffCounts(diff: string): { added: number; removed: number } {
   }
 }
 
+/** Edit/Write mudam um arquivo; um Bash pode mudar vários (o diff que o Claude Code anota no resultado). */
+export function changesOf(entry: Activity): FileChange[] {
+  return entry.files ?? (entry.file ? [entry.file] : [])
+}
+
 /** Os arquivos que o Claude mudou na sessão, do mais recente ao mais antigo, com as trocas em ordem. */
 export function filesChanged(activity: Activity[]): FileSummary[] {
   const byPath = new Map<string, FileSummary>()
   for (const entry of activity) {
-    if (!entry.file || entry.status !== 'ok') continue
-    const { path, diff, content } = entry.file
-    const counts = diff !== undefined ? diffCounts(diff) : { added: (content ?? '').split('\n').length, removed: 0 }
-    const known = byPath.get(path)
-    byPath.set(path, {
-      path,
-      changes: [...(known?.changes ?? []), entry],
-      added: (known?.added ?? 0) + counts.added,
-      removed: (known?.removed ?? 0) + counts.removed,
-      isWritten: (known?.isWritten ?? false) || content !== undefined,
-      lastAt: entry.startedAt,
-    })
+    if (entry.status !== 'ok') continue
+    for (const { path, diff, content } of changesOf(entry)) {
+      const counts = diff !== undefined ? diffCounts(diff) : { added: (content ?? '').split('\n').length, removed: 0 }
+      const known = byPath.get(path)
+      byPath.set(path, {
+        path,
+        changes: [...(known?.changes ?? []), entry],
+        added: (known?.added ?? 0) + counts.added,
+        removed: (known?.removed ?? 0) + counts.removed,
+        isWritten: (known?.isWritten ?? false) || content !== undefined,
+        lastAt: entry.startedAt,
+      })
+    }
   }
   return [...byPath.values()].sort((a, b) => b.lastAt - a.lastAt)
 }

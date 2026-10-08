@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Activity, ActivityFilter, GitInfo, PaneMode, PaneTab, PrInfo, RequestGroup, Task, TaskStatus, UsageInfo } from '../types'
-import { classifyToolCall, isBookkeeping, patchDiff, patchStat, settleCategory, type PatchHunk } from './lib/classify'
+import { classifyToolCall, gitNote, isBookkeeping, patchDiff, patchStat, settleCategory, type GitOperation, type PatchHunk } from './lib/classify'
 import { clockTime, duration, truncate } from './lib/format'
 import {
   activityItems,
@@ -38,7 +38,7 @@ const COMPACT_COLUMNS = 42
 const FULL_COLUMNS = 100
 const COMPACT_TASKS = 5
 const INLINE_ROWS = 14
-const COMPACT_PREVIEW_LINES = 12
+const COMPACT_PREVIEW_LINES = 6
 const COMPACT_DETAIL_LINES = 3
 
 const activity = atom({ plugin: 'painel', key: 'activity' } as const, [] as Activity[])
@@ -283,6 +283,20 @@ export const register: Register = on => {
         classified.file && patch && patch.length > 0
           ? { file: { path: classified.file.path, diff: patchDiff(patch) }, stat: patchStat(patch) }
           : {}
+      const bash = ran.result as
+        | { bashEditDiff?: { files: { filePath: string; hunks: PatchHunk[] }[] }; gitOperation?: GitOperation }
+        | undefined
+      const bashFiles = bash?.bashEditDiff?.files ?? []
+      const fromBash = {
+        ...(bashFiles.length > 0
+          ? {
+              files: bashFiles.map(file => ({ path: file.filePath, diff: patchDiff(file.hunks) })),
+              stat: patchStat(bashFiles.flatMap(file => file.hunks)),
+              category: 'edit' as const,
+            }
+          : {}),
+        ...(gitNote(bash?.gitOperation) ? { gitNote: gitNote(bash?.gitOperation) } : {}),
+      }
       const isError = ran.deny !== undefined || ran.isError === true
       const output = (ran.deny ?? ran.text ?? '').slice(0, MAX_OUTPUT_CHARS)
       await update($, activity, list =>
@@ -295,6 +309,7 @@ export const register: Register = on => {
                 output,
                 category: settleCategory(classified.category, ran.isReadOnly === true),
                 ...fromPatch,
+                ...fromBash,
               }
             : entry,
         ),
@@ -458,6 +473,7 @@ export const register: Register = on => {
         width: detailWidth,
         previewLines: isCompact ? COMPACT_PREVIEW_LINES : OUTPUT_PREVIEW_LINES,
         isFull: isFullOutput,
+        home: homeDir,
         onShowAll: () =>
           void (isCompact ? openPane($, { tab: 'activity', expand: entry.id }) : update($, showFullOutput, () => true)),
       })
@@ -466,7 +482,8 @@ export const register: Register = on => {
       const icon = iconFor(entry)
       const isOpen = entry.id === expandedId
       const isRunning = entry.status === 'running'
-      const tail = isRunning ? ` ${duration(currentTime - entry.startedAt)}` : `${entry.stat ? ` ${entry.stat}` : ''}${repeatSuffix(count)}`
+      const note = [entry.stat, entry.gitNote].filter(Boolean).join(' · ')
+      const tail = isRunning ? ` ${duration(currentTime - entry.startedAt)}` : `${note ? ` ${note}` : ''}${repeatSuffix(count)}`
       return (
         <Box key={`row-${entry.id}`} flexDirection="column">
           <Box>
@@ -660,6 +677,8 @@ export const register: Register = on => {
                           width: width - 4,
                           previewLines: OUTPUT_PREVIEW_LINES,
                           isFull: isFullOutput,
+                          onlyPath: file.path,
+                          home: homeDir,
                           onShowAll: () => void update($, showFullOutput, () => true),
                         })}
                       </Box>
