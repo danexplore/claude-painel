@@ -17,7 +17,7 @@ import {
   type Tone,
 } from './lib/layout'
 import { parseGitStatus, parsePrView } from './lib/parse'
-import { imageNumbers, ppmToCells, tileSize } from './lib/thumbnail'
+import { ansiToCells, chafaCommand, imageNumbers } from './lib/thumbnail'
 
 const PANE = 'painel'
 const MAX_ACTIVITY = 200
@@ -192,15 +192,10 @@ async function makeThumbnail($: Engine, dir: string | undefined, n: number): Pro
   if (cached) return cached
   const missing: Thumbnail = { n, columns: 12, rows: 1, cells: null }
   if (dir === undefined || !(await $.fs.exists(path))) return missing
-  const identify = await $.process.run(['magick', 'identify', '-format', '%w %h', `${path}[0]`], { timeoutMs: 5_000 })
-  const [width, height] = identify.stdout.trim().split(' ').map(Number)
-  if (identify.exitCode !== 0 || !width || !height) return missing
-  const { columns, rows } = tileSize(width, height)
-  const ppm = await $.process.run(
-    ['magick', `${path}[0]`, '-resize', `${columns}x${rows * 2}!`, '-depth', '8', '-compress', 'none', 'ppm:-'],
-    { timeoutMs: 10_000 },
-  )
-  const thumbnail = { n, columns, rows, cells: ppm.exitCode === 0 ? ppmToCells(ppm.stdout, columns, rows) : null }
+  const drawn = await $.process.run(chafaCommand(path), { timeoutMs: 10_000 })
+  const raster = drawn.exitCode === 0 ? ansiToCells(drawn.stdout) : null
+  if (!raster) return missing
+  const thumbnail = { n, ...raster }
   thumbnailCache.set(path, thumbnail)
   return thumbnail
 }
