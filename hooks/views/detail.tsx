@@ -50,7 +50,7 @@ export function coloredStat(kit: Kit, key: string, text: string): RenderNode {
         .map((part, index) => (
           <Text
             key={`${key}-${index}`}
-            color={part.startsWith('+') ? 'diffAdded' : part.startsWith('−') ? 'diffRemoved' : undefined}
+            color={part.startsWith('+') ? 'success' : part.startsWith('−') ? 'error' : undefined}
             dimColor={!STAT_PART.test(part)}
           >
             {part}
