@@ -58,6 +58,7 @@ const TONE_STYLE: Record<Tone, { color?: string; dimColor?: boolean }> = {
 }
 
 const FILTER_LABEL: Record<ActivityFilter, string> = { all: 'todos', critical: '⚠ críticos', mcp: '◆ MCP', cli: '⚙ CLI' }
+const COMPACT_FILTER_LABEL: Record<ActivityFilter, string> = { all: 'todos', critical: 'crítico', mcp: 'MCP', cli: 'CLI' }
 
 const GIT_TOUCHING_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'Bash'])
 
@@ -370,13 +371,27 @@ export const register: Register = on => {
     if ((await read($, paneMode)) === 'compact') {
       const openTasks = taskList.filter(task => task.status !== 'completed')
       const doneTasks = taskList.length - openTasks.length
-      const counts = (['critical', 'mcp', 'cli'] as const)
-        .map(kind => ({ kind, total: list.filter(entry => entry.kind === kind).length }))
-        .filter(({ total }) => total > 0)
       const shownTasks = openTasks.slice(0, COMPACT_TASKS)
-      const headerRows = 3 + (taskList.length > 0 ? shownTasks.length + 2 : 0)
+      const headerRows = 4 + (taskList.length > 0 ? shownTasks.length + 2 : 0)
       const room = Math.max(3, (e.viewport?.rows ?? 30) - headerRows)
-      const groups = groupRepeats([...list].reverse()).slice(0, room)
+      const filtered = [...list].reverse().filter(entry => matchesFilter(entry, currentFilter))
+      const groups = groupRepeats(filtered).slice(0, room)
+      const filterButton = (kind: ActivityFilter) => (
+        <Box key={`cfilter-${kind}`}>
+          {kind !== 'all' && (
+            <Text {...TONE_STYLE[kind === 'critical' ? 'high' : kind]} dimColor={currentFilter !== kind ? true : undefined}>
+              {KIND_ICON[kind]}
+            </Text>
+          )}
+          <Button
+            key={`cfilter-btn-${kind}`}
+            plain
+            dimColor={currentFilter !== kind ? true : undefined}
+            label={`${kind === 'all' ? '' : ' '}${COMPACT_FILTER_LABEL[kind]} ${list.filter(entry => matchesFilter(entry, kind)).length}`}
+            onPress={() => void update($, filter, current => (current === kind && kind !== 'all' ? 'all' : kind))}
+          />
+        </Box>
+      )
 
       return (
         <Box flexDirection="column">
@@ -384,14 +399,8 @@ export const register: Register = on => {
             <Text bold>Atividade</Text>
             <Button key="expand" plain hotkey="a" label="abrir" onPress={() => void openPane($, { tab: 'activity' })} />
           </Box>
-          <Box gap={2}>
-            {counts.length === 0 && <Text dimColor>{list.length} chamadas</Text>}
-            {counts.map(({ kind, total }) => (
-              <Text key={`count-${kind}`} {...TONE_STYLE[kind === 'critical' ? 'high' : kind]}>
-                {KIND_ICON[kind]} {total}
-              </Text>
-            ))}
-          </Box>
+          <Box gap={2}>{(['all', 'critical', 'mcp', 'cli'] as const).map(filterButton)}</Box>
+          <Text dimColor>· comum  ✗ erro  ▶ rodando  ×N repetido</Text>
           {rule}
           {taskList.length > 0 && (
             <Box flexDirection="column">
