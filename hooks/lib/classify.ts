@@ -48,10 +48,27 @@ function classifyShellSegment(segment: string): ActivityKind {
   return INTEGRATION_PROGRAMS.has(program ?? '') ? 'cli' : 'plain'
 }
 
+const SQL_RUNNER = /^(?:psql|supabase\s+db)\b/
+
 export function classifyShell(command: string): ActivityKind {
   const clean = stripRtk(command)
-  if (CRITICAL_SHELL.some(rule => rule.test(clean)) || isCriticalSql(clean)) return 'critical'
-  return splitShellChain(clean).some(segment => classifyShellSegment(segment) === 'cli') ? 'cli' : 'plain'
+  const segments = splitShellChain(clean)
+  const runsSql = segments.some(segment => SQL_RUNNER.test(segment))
+  if (CRITICAL_SHELL.some(rule => rule.test(clean)) || (runsSql && isCriticalSql(clean))) return 'critical'
+  return segments.some(segment => classifyShellSegment(segment) === 'cli') ? 'cli' : 'plain'
+}
+
+const LEADING_CD = /^\s*cd\s+(?:"[^"]*"|'[^']*'|\S+)\s*&&\s*/
+
+export function shellLabel(command: string): string {
+  return oneLine(stripRtk(command).replace(LEADING_CD, ''))
+}
+
+const BOOKKEEPING_TOOLS = new Set(['ToolSearch', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])
+
+/** Chamadas de bastidor do próprio Claude, que não dizem nada sobre o trabalho em si. */
+export function isBookkeeping(tool: string): boolean {
+  return BOOKKEEPING_TOOLS.has(tool) || tool.startsWith('mcp__plan-progress__')
 }
 
 function oneLine(text: string): string {
@@ -79,7 +96,7 @@ function stringField(input: Record<string, unknown>, field: string): string | un
 export function classifyToolCall(tool: string, input: Record<string, unknown>): Classified {
   if (tool === 'Bash') {
     const command = stringField(input, 'command') ?? ''
-    return { kind: classifyShell(command), label: oneLine(stripRtk(command)), detail: command }
+    return { kind: classifyShell(command), label: shellLabel(command), detail: command }
   }
 
   const mcp = parseMcpTool(tool)

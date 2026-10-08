@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Activity, ActivityFilter, GitInfo, PaneTab, PrInfo, Task, TaskStatus, UsageInfo } from '../types'
-import { classifyToolCall } from './lib/classify'
+import { classifyToolCall, isBookkeeping } from './lib/classify'
 import { clockTime, duration, truncate } from './lib/format'
 import {
   KIND_ICON,
@@ -185,26 +185,31 @@ export const register: Register = on => {
     const classified = classifyToolCall(String(e.tool), input)
     const id = e.tool_use_id ?? `${e.tool}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const started = Date.now()
+    const isTracked = !isBookkeeping(String(e.tool))
 
-    await update($, activity, list =>
-      [...list, { id, startedAt: started, status: 'running' as const, ...classified }].slice(-MAX_ACTIVITY),
-    )
-    await update($, now, () => started)
-    ensureTicker($)
+    if (isTracked) {
+      await update($, activity, list =>
+        [...list, { id, startedAt: started, status: 'running' as const, ...classified }].slice(-MAX_ACTIVITY),
+      )
+      await update($, now, () => started)
+      ensureTicker($)
+    }
 
     const ran = await next(e)
 
-    const isError = ran.deny !== undefined || ran.isError === true
-    const output = (ran.deny ?? ran.text ?? '').slice(0, MAX_OUTPUT_CHARS)
-    await update($, activity, list =>
-      list.map(entry =>
-        entry.id === id
-          ? { ...entry, status: isError ? ('error' as const) : ('ok' as const), ms: Date.now() - started, output }
-          : entry,
-      ),
-    )
-    if (classified.kind === 'critical') {
-      await update($, unseenCritical, ids => [...ids, id])
+    if (isTracked) {
+      const isError = ran.deny !== undefined || ran.isError === true
+      const output = (ran.deny ?? ran.text ?? '').slice(0, MAX_OUTPUT_CHARS)
+      await update($, activity, list =>
+        list.map(entry =>
+          entry.id === id
+            ? { ...entry, status: isError ? ('error' as const) : ('ok' as const), ms: Date.now() - started, output }
+            : entry,
+        ),
+      )
+      if (classified.kind === 'critical') {
+        await update($, unseenCritical, ids => [...ids, id])
+      }
     }
 
     const created = (ran.result as { task?: { id: string; subject: string } } | undefined)?.task
@@ -310,26 +315,30 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
-    const width = e.props.bodyColumns - 1
+    const width = Math.max(30, e.props.bodyColumns - 1)
     const currentTab = await read($, tab)
     const currentFilter = await read($, filter)
     const list = await read($, activity)
     const taskList = await read($, tasks)
     const expandedId = await read($, expanded)
     const isFullOutput = await read($, showFullOutput)
+    const currentTime = (await read($, now)) || Date.now()
+
+    const rule = <Text dimColor>{'─'.repeat(width)}</Text>
 
     const tabs = (
-      <Box gap={2}>
-        <Button key="tab-activity" plain hotkey="1" label={currentTab === 'activity' ? '● Atividade' : 'Atividade'} onPress={() => void update($, tab, () => 'activity')} />
-        <Button key="tab-tasks" plain hotkey="2" label={`${currentTab === 'tasks' ? '● ' : ''}Tarefas (${taskList.length})`} onPress={() => void update($, tab, () => 'tasks')} />
+      <Box gap={3}>
+        <Button key="tab-activity" plain hotkey="1" dimColor={currentTab !== 'activity' ? true : undefined} label={`Atividade ${list.length}`} onPress={() => void update($, tab, () => 'activity')} />
+        <Button key="tab-tasks" plain hotkey="2" dimColor={currentTab !== 'tasks' ? true : undefined} label={`Tarefas ${taskList.length}`} onPress={() => void update($, tab, () => 'tasks')} />
       </Box>
     )
 
     if (currentTab === 'tasks') {
-      const glyph = { pending: '☐', in_progress: '◐', completed: '☑' } as const
+      const glyph = { pending: '○', in_progress: '◐', completed: '●' } as const
       return (
         <Box flexDirection="column">
           {tabs}
+          {rule}
           {taskList.length === 0 && <Text dimColor>Nenhuma tarefa nesta sessão.</Text>}
           {taskList.map(task => (
             <Text key={`task-${task.id}`} dimColor={task.status === 'completed'} color={task.status === 'in_progress' ? 'warning' : undefined}>
@@ -342,12 +351,13 @@ export const register: Register = on => {
 
     const count = (kind: ActivityFilter) => list.filter(entry => matchesFilter(entry, kind)).length
     const filters = (
-      <Box gap={1}>
+      <Box gap={3}>
         {(['all', 'critical', 'mcp', 'cli'] as const).map(kind => (
           <Button
             key={`filter-${kind}`}
-            variant={currentFilter === kind ? 'primary' : undefined}
-            label={`${FILTER_LABEL[kind]} ${count(kind)}`}
+            plain
+            dimColor={currentFilter !== kind ? true : undefined}
+            label={`${currentFilter === kind ? '▸ ' : ''}${FILTER_LABEL[kind]} ${count(kind)}`}
             onPress={() => void update($, filter, () => kind)}
           />
         ))}
@@ -355,41 +365,41 @@ export const register: Register = on => {
     )
 
     const rows = [...list].reverse().filter(entry => matchesFilter(entry, currentFilter))
-    const labelWidth = Math.max(10, width - 6 - 2 - 8)
+    const TIME_COL = 6
+    const ICON_COL = 2
+    const DURATION_COL = 6
+    const labelWidth = Math.max(10, width - TIME_COL - ICON_COL - DURATION_COL)
 
     return (
       <Box flexDirection="column">
         {tabs}
         {filters}
+        {rule}
         {rows.length === 0 && <Text dimColor>Nada por aqui ainda.</Text>}
-        {rows.map(entry => {
+        {rows.map((entry, index) => {
           const isOpen = entry.id === expandedId
-          const status =
-            entry.status === 'running' ? (
-              <Text color="warning">▶</Text>
-            ) : entry.status === 'error' ? (
-              <Text color="error">✗</Text>
-            ) : (
-              <Text color="success">✓</Text>
-            )
-          const icon = KIND_ICON[entry.kind]
+          const time = clockTime(entry.startedAt)
+          const showTime = index === 0 || clockTime(rows[index - 1]!.startedAt) !== time
+          const isRunning = entry.status === 'running'
+          const isError = entry.status === 'error'
+          const icon = isRunning ? '▶' : isError ? '✗' : KIND_ICON[entry.kind]
+          const iconColor = isRunning ? 'warning' : isError || entry.kind === 'critical' ? 'error' : entry.kind === 'mcp' ? 'magenta' : entry.kind === 'cli' ? 'cyan' : undefined
+          const elapsed = isRunning ? currentTime - entry.startedAt : entry.ms
+          const label = truncate(entry.label, labelWidth)
           const outputLines = (entry.output ?? '').split('\n')
           const shownOutput = isFullOutput ? outputLines : outputLines.slice(0, OUTPUT_PREVIEW_LINES)
           return (
             <Box key={`row-${entry.id}`} flexDirection="column">
               <Box>
-                <Text dimColor>{clockTime(entry.startedAt)} </Text>
-                <Text
-                  color={entry.kind === 'critical' ? 'error' : entry.kind === 'mcp' ? 'magenta' : entry.kind === 'cli' ? 'cyan' : undefined}
-                  bold={entry.kind === 'critical'}
-                  dimColor={entry.kind === 'plain'}
-                >
-                  {icon}{' '}
+                <Text dimColor>{(showTime ? time : '').padEnd(TIME_COL)}</Text>
+                <Text color={iconColor} dimColor={iconColor === undefined} bold={entry.kind === 'critical'}>
+                  {icon.padEnd(ICON_COL)}
                 </Text>
                 <Button
                   key={`toggle-${entry.id}`}
                   plain
-                  label={truncate(entry.label, labelWidth)}
+                  dimColor={entry.kind === 'plain' && !isError && !isOpen ? true : undefined}
+                  label={label}
                   onPress={() =>
                     void (async () => {
                       await update($, showFullOutput, () => false)
@@ -397,22 +407,23 @@ export const register: Register = on => {
                     })()
                   }
                 />
-                <Text> </Text>
-                {status}
-                <Text dimColor> {entry.ms === undefined ? '' : duration(entry.ms).padStart(5)}</Text>
+                <Text>{' '.repeat(Math.max(0, labelWidth - label.length))}</Text>
+                <Text dimColor color={isError ? 'error' : undefined}>
+                  {(elapsed === undefined ? '' : duration(elapsed)).padStart(DURATION_COL)}
+                </Text>
               </Box>
               {isOpen && (
-                <Box flexDirection="column" paddingLeft={6}>
-                  <Text>{entry.detail}</Text>
+                <Box flexDirection="column" paddingLeft={TIME_COL + ICON_COL} paddingBottom={1}>
+                  <Text dimColor>{entry.detail}</Text>
                   {entry.output ? (
-                    <Box flexDirection="column" borderStyle="single" borderDimColor paddingX={1}>
-                      <Text dimColor>{shownOutput.join('\n')}</Text>
+                    <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+                      <Text color={isError ? 'error' : undefined}>{shownOutput.join('\n')}</Text>
                     </Box>
                   ) : (
                     <Text dimColor>(sem saída)</Text>
                   )}
                   {!isFullOutput && outputLines.length > OUTPUT_PREVIEW_LINES && (
-                    <Button key={`full-${entry.id}`} label={`ver tudo (${outputLines.length} linhas)`} onPress={() => void update($, showFullOutput, () => true)} />
+                    <Button key={`full-${entry.id}`} plain label={`ver tudo · ${outputLines.length} linhas`} onPress={() => void update($, showFullOutput, () => true)} />
                   )}
                 </Box>
               )}

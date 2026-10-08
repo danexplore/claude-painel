@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { classifyShell, classifyToolCall, stripRtk } from '../hooks/lib/classify'
+import { classifyShell, classifyToolCall, isBookkeeping, stripRtk } from '../hooks/lib/classify'
 import { bar, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
 import { activityItems, fitSegments, statusSegments, type Segment } from '../hooks/lib/layout'
 import { parseGitStatus, parsePrView } from '../hooks/lib/parse'
@@ -46,6 +46,22 @@ describe('classificação de comandos', () => {
 
   test('apply_migration é crítico', async () => {
     expect(classifyToolCall('mcp__claude_ai_Supabase__apply_migration', {}).kind).toBe('critical')
+  })
+
+  test('grep por "truncate" não é crítico', async () => {
+    expect(classifyShell('grep -n "export function truncate" format.ts')).toBe('plain')
+  })
+
+  test('psql com TRUNCATE é crítico', async () => {
+    expect(classifyShell('psql -c "TRUNCATE users"')).toBe('critical')
+  })
+
+  test('rótulo some com o cd inicial', async () => {
+    expect(classifyToolCall('Bash', { command: 'cd ~/x && rtk git status' }).label).toBe('git status')
+  })
+
+  test('ToolSearch e plan-progress são bastidor', async () => {
+    expect([isBookkeeping('ToolSearch'), isBookkeeping('mcp__plan-progress__plan_progress'), isBookkeeping('Bash')]).toEqual([true, true, false])
   })
 
   test('Edit mostra só o nome do arquivo', async () => {
