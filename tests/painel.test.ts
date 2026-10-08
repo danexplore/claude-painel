@@ -4,7 +4,6 @@ import { classifyShell, classifyToolCall, isBookkeeping, shortenPaths, stripRtk 
 import { bar, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
 import { activityItems, fitSegments, groupRepeats, statusSegments, type Segment } from '../hooks/lib/layout'
 import { parseGitStatus, parsePrView } from '../hooks/lib/parse'
-import { ansiToCells, imageNumbers, toBase64 } from '../hooks/lib/thumbnail'
 import type { Activity } from '../types'
 
 describe('classificação de comandos', () => {
@@ -264,33 +263,4 @@ test('chamada de ferramenta não aparece no chat', async ($, on) => {
   } as never)
   expect(await ui.find({ text: /ls/ })).toBe(undefined)
   await ui.unmount()
-})
-
-describe('preview de imagem', () => {
-  test('acha as tags de imagem do rascunho, sem repetir', async () => {
-    expect(imageNumbers('olha [Image #2] e [Image #5] e [Image #2]')).toEqual([2, 5])
-  })
-
-  test('base64 igual ao padrão', async () => {
-    expect(toBase64(new Uint8Array([104, 105, 33, 63]))).toBe('aGkhPw==')
-  })
-
-  test('célula do chafa vira glifo com frente e fundo', async () => {
-    const raster = ansiToCells('\x1b[0m\x1b[38;2;255;0;0;48;2;0;0;255m▀\x1b[0m\n')
-    expect(raster).toEqual({ columns: 1, rows: 1, cells: toBase64(new Uint8Array(Uint32Array.of(0x2580, 0xff0000, 0x0000ff).buffer)) })
-  })
-
-  test('linhas curtas são completadas com espaço', async () => {
-    const raster = ansiToCells('\x1b[38;2;1;2;3;48;2;4;5;6mab\nc')
-    expect([raster?.columns, raster?.rows]).toEqual([2, 2])
-  })
-
-  test('saída real do chafa (imagem larga, 6x2) vira a grade inteira', async () => {
-    const raster = ansiToCells("\u001b[0m\u001b[0m\u001b[38;2;75;61;70;48;2;67;47;60m\u2586\u001b[0m\u001b[38;2;70;54;65;48;2;57;28;48m\u2586\u001b[0m\u001b[38;2;60;38;52;48;2;48;12;37m\u2586\u001b[0m\u001b[38;2;48;10;36;48;2;54;30;46m\u2582\u001b[0m\u001b[38;2;54;34;51;48;2;72;72;73m\u258d\u001b[0m\u001b[38;2;76;75;76;48;2;51;51;51m\u2585\u001b[0m\n\u001b[0m\u001b[38;2;62;32;43;48;2;81;67;80m\u2582\u001b[0m\u001b[38;2;78;65;82;48;2;60;33;50m\u2598\u001b[0m\u001b[38;2;50;14;39;48;2;64;40;56m\u2583\u001b[0m\u001b[38;2;50;14;39;48;2;62;38;53m\u2583\u001b[0m\u001b[38;2;73;72;73;48;2;56;39;52m\u259d\u001b[0m\u001b[38;2;69;68;69;48;2;52;41;48m\u2580\u001b[0m\n")
-    expect([raster?.columns, raster?.rows]).toEqual([6, 2])
-  })
-
-  test('saída vazia não vira preview', async () => {
-    expect(ansiToCells('')).toBe(null)
-  })
 })

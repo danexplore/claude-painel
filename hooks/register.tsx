@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Activity, ActivityFilter, GitInfo, PaneMode, PaneTab, PrInfo, Task, TaskStatus, Thumbnail, UsageInfo } from '../types'
+import type { Activity, ActivityFilter, GitInfo, PaneMode, PaneTab, PrInfo, Task, TaskStatus, UsageInfo } from '../types'
 import { classifyToolCall, isBookkeeping } from './lib/classify'
 import { clockTime, duration, truncate } from './lib/format'
 import {
@@ -17,7 +17,6 @@ import {
   type Tone,
 } from './lib/layout'
 import { parseGitStatus, parsePrView } from './lib/parse'
-import { ansiToCells, chafaCommand, imageNumbers } from './lib/thumbnail'
 
 const PANE = 'painel'
 const MAX_ACTIVITY = 200
@@ -51,7 +50,6 @@ const paneMode = atom({ plugin: 'painel', key: 'paneMode' } as const, 'compact' 
 const sideListShown = atom({ plugin: 'painel', key: 'sideListShown' } as const, false)
 const sideListDismissed = atom({ plugin: 'painel', key: 'sideListDismissed' } as const, false)
 const toolsInChat = atom({ plugin: 'painel', key: 'toolsInChat' } as const, false)
-const thumbnails = atom({ plugin: 'painel', key: 'thumbnails' } as const, [] as Thumbnail[])
 
 const TONE_STYLE: Record<Tone, { color?: string; dimColor?: boolean }> = {
   normal: {},
@@ -164,61 +162,6 @@ function recordTask(list: Task[], id: string, change: Partial<Task>): Task[] {
   return list.map(task => (task.id === id ? { ...task, ...change } : task))
 }
 
-// Colar uma imagem não dispara prompt.edit (a tag só aparece na próxima tecla), então o rascunho é lido em intervalos.
-const DRAFT_POLL_MS = 250
-let imagesDir: { sessionId: string; dir: string } | undefined
-let shownImages: string | undefined
-let isCheckingDraft = false
-const thumbnailCache = new Map<string, Thumbnail>()
-
-// O Claude Code guarda cada imagem colada em <tmp>/<projeto>/<sessão>/images/<n>.png.
-async function findImagesDir($: Engine): Promise<string | undefined> {
-  const sessionId = await $.session.id()
-  if (imagesDir?.sessionId === sessionId) return imagesDir.dir
-  const tmpRoot = (await $.env.get('CLAUDE_CODE_TMPDIR')) ?? `/tmp/claude-${(await $.process.run(['id', '-u'])).stdout.trim()}`
-  for (const entry of await $.fs.list(tmpRoot).catch(() => [])) {
-    const dir = `${tmpRoot}/${entry.name}/${sessionId}/images`
-    if (entry.kind === 'dir' && (await $.fs.exists(dir))) {
-      imagesDir = { sessionId, dir }
-      return dir
-    }
-  }
-  return undefined
-}
-
-async function makeThumbnail($: Engine, dir: string | undefined, n: number): Promise<Thumbnail> {
-  const path = `${dir}/${n}.png`
-  const cached = thumbnailCache.get(path)
-  if (cached) return cached
-  const missing: Thumbnail = { n, columns: 12, rows: 1, cells: null }
-  if (dir === undefined || !(await $.fs.exists(path))) return missing
-  const drawn = await $.process.run(chafaCommand(path), { timeoutMs: 10_000 })
-  const raster = drawn.exitCode === 0 ? ansiToCells(drawn.stdout) : null
-  if (!raster) return missing
-  const thumbnail = { n, ...raster }
-  thumbnailCache.set(path, thumbnail)
-  return thumbnail
-}
-
-async function checkDraft($: Engine): Promise<void> {
-  if (isCheckingDraft) return
-  isCheckingDraft = true
-  try {
-    const numbers = imageNumbers((await $.prompt.read()).text)
-    const key = numbers.join(',')
-    if (key === shownImages) return
-    const dir = numbers.length > 0 ? await findImagesDir($) : undefined
-    const list: Thumbnail[] = []
-    for (const n of numbers) list.push(await makeThumbnail($, dir, n))
-    shownImages = list.every(thumbnail => thumbnail.cells !== null) ? key : undefined
-    await update($, thumbnails, () => list)
-  } catch {
-    shownImages = undefined
-  } finally {
-    isCheckingDraft = false
-  }
-}
-
 let lastBranch: string | undefined
 let ticker: { cancel: () => void } | undefined
 
@@ -257,7 +200,6 @@ export const register: Register = on => {
     $.clock.every(GIT_EVERY_MS, () => void syncGit($))
     $.clock.every(PR_EVERY_MS, () => void refreshPr($))
     $.clock.every(60_000, () => void update($, now, () => Date.now()))
-    $.clock.every(DRAFT_POLL_MS, () => void checkDraft($))
     await ensureSideList($)
     return result
   })
@@ -437,28 +379,8 @@ export const register: Register = on => {
 
     const below = await next(e)
     const isSideListShown = await read($, sideListShown)
-    const pasted = e.surface === 'terminal' ? await read($, thumbnails) : []
-    const previews =
-      e.surface === 'terminal' && pasted.length > 0 ? (
-        <Box columnGap={1} paddingLeft={1}>
-          {pasted.map(thumbnail => {
-            const { Raster } = $.ui.resolve(e)
-            return (
-              <Box key={`thumb-${thumbnail.n}`} flexDirection="column" alignItems="center" borderStyle="round" borderDimColor>
-                {thumbnail.cells ? (
-                  <Raster key={`raster-${thumbnail.n}`} columns={thumbnail.columns} rows={thumbnail.rows} cells={thumbnail.cells} />
-                ) : (
-                  <Text dimColor>sem preview</Text>
-                )}
-                <Text dimColor>#{thumbnail.n}</Text>
-              </Box>
-            )
-          })}
-        </Box>
-      ) : null
     return (
       <Box flexDirection="column">
-        {previews}
         {statusLine}
         {!isSideListShown && activityLine}
         {below}
