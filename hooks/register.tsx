@@ -29,6 +29,7 @@ const ACTIVITY_HOTKEY_WIDTH = 'a: atividade'.length + 4
 const COMPACT_COLUMNS = 42
 const FULL_COLUMNS = 100
 const COMPACT_TASKS = 5
+const INLINE_ROWS = 14
 
 const activity = atom({ plugin: 'painel', key: 'activity' } as const, [] as Activity[])
 const unseenCritical = atom({ plugin: 'painel', key: 'unseenCritical' } as const, [] as string[])
@@ -130,10 +131,21 @@ async function openPane($: Engine, target: PaneTarget): Promise<void> {
 
 /** A lista estreita à direita. Aberta sem clique, o engine só a mostra com 144 colunas ou mais. */
 async function openSideList($: Engine): Promise<void> {
-  const opened = $.ui.open({ id: PANE, title: 'Atividade', columns: COMPACT_COLUMNS })
+  const opened = $.ui.open({ id: PANE, title: 'Atividade', columns: COMPACT_COLUMNS, rows: INLINE_ROWS })
   await update($, paneMode, () => 'compact')
   const placed = await opened
   await update($, sideListShown, () => placed.isPlaced)
+}
+
+/** Mantém a lista lateral de pé: reabre se sumiu, a menos que a pessoa a tenha fechado no ×. */
+async function ensureSideList($: Engine): Promise<void> {
+  if (await read($, sideListDismissed)) return
+  const pane = (await $.ui.panes()).find(open => open.id === PANE)
+  if (pane) {
+    await update($, sideListShown, () => pane.isPlaced)
+    return
+  }
+  await openSideList($)
 }
 
 function recordTask(list: Task[], id: string, change: Partial<Task>): Task[] {
@@ -180,7 +192,7 @@ export const register: Register = on => {
     $.clock.every(GIT_EVERY_MS, () => void syncGit($))
     $.clock.every(PR_EVERY_MS, () => void refreshPr($))
     $.clock.every(60_000, () => void update($, now, () => Date.now()))
-    if (!(await read($, sideListDismissed))) await openSideList($)
+    await ensureSideList($)
     return result
   })
 
@@ -203,6 +215,7 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
+    await ensureSideList($)
     await update($, turns, count => count + 1)
     await update($, now, () => Date.now())
     return next(e)
