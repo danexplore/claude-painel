@@ -1,7 +1,8 @@
 {
   "name": "painel",
-  "version": "0.9.5",
-  "author": { "name": "daniel-moreira-batista" },
+  "version": "1.0.0",
+  "author": { "name": "danexplore", "url": "https://github.com/danexplore" },
+  "repository": "https://github.com/danexplore/claude-painel",
   "description": "Faixa compacta com uso, git, PR, tarefas e atividade do Claude, com painel de detalhes clicável",
   "types": "./types/index.d.ts"
 }

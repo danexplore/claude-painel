@@ -198,8 +198,8 @@ describe('leitura de git e PR', () => {
       '1 .M N... 100644 100644 100644 a b src/a.ts',
       '? novo.txt',
     ].join('\n')
-    expect(parseGitStatus(porcelain, '/home/u/projetos/sonar\n')).toEqual({
-      repo: 'sonar',
+    expect(parseGitStatus(porcelain, '/home/u/projetos/app\n')).toEqual({
+      repo: 'app',
       branch: 'feat/x',
       changed: 2,
       ahead: 1,
@@ -230,7 +230,7 @@ describe('leitura de git e PR', () => {
 describe('layout da faixa', () => {
   const data = {
     usage: { contextTokens: 142_000, contextWindow: 1_000_000, contextPercent: 14, limits: [] },
-    git: { repo: 'sonar', branch: 'feat/x', changed: 3, ahead: 1, behind: 0 },
+    git: { repo: 'app', branch: 'feat/x', changed: 3, ahead: 1, behind: 0 },
     pr: { state: 'open' as const, number: 412, checks: ['pass' as const, 'fail' as const], review: null },
     tasks: [{ id: '1', subject: 'a', status: 'completed' as const }],
     unseenCritical: 1,

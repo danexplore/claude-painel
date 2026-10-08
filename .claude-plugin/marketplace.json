@@ -1,5 +1,11 @@
 {
-  "name": "painel-local",
-  "owner": { "name": "daniel-moreira-batista" },
-  "plugins": [{ "name": "painel", "source": "./" }]
+  "name": "claude-painel",
+  "owner": { "name": "danexplore", "url": "https://github.com/danexplore" },
+  "plugins": [
+    {
+      "name": "painel",
+      "source": "./",
+      "description": "Faixa de uso/git/PR acima do prompt e lista lateral da atividade do Claude, com diffs e visualizador de MCP"
+    }
+  ]
 }

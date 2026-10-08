@@ -13,12 +13,12 @@ Substitui o `token-weather-usage` (o usuário desliga o plugin).
 - Lista de arquivos alterados e diff: usar o `/diff` nativo (clicável, rolável, por turno).
 - Bloquear comandos: o mod só destaca; não nega nada (sessão roda em `bypassPermissions`).
 - Auto-accept do Supabase: já feito via hook `Elicitation` em `~/.claude/settings.json`.
-- Tasks do Octalab/Colmeia: "tarefas" aqui = lista de tarefas do próprio Claude na sessão.
+- "Tarefas" aqui = lista de tarefas do próprio Claude na sessão (não um gerenciador externo).
 
 ## 1. Faixa acima do prompt (band, 2 linhas)
 
 ```
-◔ 142k/1M 14%  5h ▰▰▰▱▱ 61%  7d ▰▰▱▱▱ 38%  │ ⎇ sonar·feat/x ●3 ↑1  PR #412 ✓✓✗  ☐ 2/5  ⚠ 2  ◷ 42m·18t
+◔ 142k/1M 14%  5h ▰▰▰▱▱ 61%  7d ▰▰▱▱▱ 38%  │ ⎇ app·feat/x ●3 ↑1  PR #412 ✓✓✗  ☐ 2/5  ⚠ 2  ◷ 42m·18t
 ⠋ pnpm vitest run 3.1s │ ⚠ git push --force │ ◆ supabase·execute_sql · gh pr checks     [atividade]
 ```
 
@@ -58,7 +58,7 @@ A band é uma árvore única: o render do painel chama `await next(e)` e empilha
  14:32 ⚠ git push --force origin feat/x        ✓  1.2s
  14:31 ◆ supabase · execute_sql                ✓  0.4s
  14:30 ⚙ gh pr checks 412                      ✗  2.1s
-       ├ cwd ~/projetos/sonar · exit 1
+       ├ cwd ~/projetos/app · exit 1
        ├ <saída, até 40 linhas>
        └ [ver tudo]
 ```
