@@ -571,6 +571,36 @@ test('modo edições abre o grupo misto em linhas e esconde o grupo sem edição
   await reads.unmount()
 })
 
+test('modo edições mostra o Bash que mudou arquivo e esconde o que não mudou', async ($, on) => {
+  on('ui.render', () => ({ type: 'Text' as const, props: {}, children: ['nativo'] }) as never)
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('tool.call', (_$: unknown, e: { tool_use_id: string }) =>
+    ({ result: e.tool_use_id === 'sed1' ? { stdout: '', stderr: '', bashEditDiff: { files: [{ filePath: '/x/a.ts', hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-a', '+b'] }] }] } } : { stdout: 'ok', stderr: '' }, text: 'ok' }) as never)
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'sed1', command: "sed -i 's/a/b/' /x/a.ts", description: 'Troca a por b' } as never)
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'ls1', command: 'ls', description: 'Lista' } as never)
+  const pane = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await pane.press({ key: 'chat-tools' })
+  await pane.unmount()
+  const base = { input: {}, isRunning: false, isErrored: false, isInterrupted: false, tool: 'Bash' }
+  const changed = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'ToolUse', props: { ...base, tool_use_id: 'sed1' } } as never)
+  const plain = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'ToolUse', props: { ...base, tool_use_id: 'ls1' } } as never)
+  expect([(await changed.find({ text: /nativo/ })) !== undefined, (await plain.find({ text: /nativo/ })) !== undefined]).toEqual([true, false])
+  await changed.unmount()
+  await plain.unmount()
+})
+
+test('« recolhe a lista e a faixa oferece a: atividade para reabrir', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.close', () => ({ value: undefined }) as never)
+  const pane = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await pane.press({ key: 'collapse' })
+  await pane.unmount()
+  const band = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'AbovePrompt', props: { bodyColumns: 120, hasSurvey: false } } as never)
+  expect((await band.find({ key: 'open-activity' })) !== undefined).toBe(true)
+  await band.unmount()
+})
+
 describe('trabalho do pedido atual', () => {
   const at = (id: string, category: Activity['category'], status: Activity['status'] = 'ok'): Activity => ({
     id, startedAt: 0, kind: 'plain', category, groupId: 'r2', label: id, detail: id, status, ...(category === 'edit' ? { stat: '+1 −0' } : {}),

@@ -35,9 +35,9 @@ todos 20  ✎ edição 12  ▶ ação 8  leitura ○  ⚠ 1
 - Clicar expande ali mesmo: comando, saída com `⎿`, e o diff de cada arquivo que mudou, com a linha real.
 - `execute_sql` do Supabase: query com cores e resultado como tabela ou registros, sem o envelope.
 - Write mostra o conteúdo com cores; `.md` aparece renderizado.
-- `t` escolhe o que aparece na conversa: nada, só as edições de arquivo, ou tudo.
+- `t` escolhe o que aparece na conversa: nada, só o que mudou arquivo (Edit, Write e Bash como `sed -i`), ou tudo.
 - Abas **Atividade**, **Arquivos** (tudo que foi editado na sessão, agrupado por projeto, caminhos a partir da raiz) e **Tarefas**.
-- Fechar no `×` recolhe a lista; `a: atividade` na faixa reabre.
+- `«` (ou `r`) recolhe a lista; `a: atividade` na faixa reabre.
 
 ## Instalar
 

@@ -66,11 +66,22 @@ const CHAT_TOOLS_LABEL: Record<ChatTools, string> = { none: 'chat: nada', edits:
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const AGENT_TOOLS = new Set(['Agent', 'Task'])
 
-/** O que aparece na conversa: nada, só as edições de arquivo, ou tudo como o Claude Code mostra. */
-async function showsInChat($: Engine, tools: string[]): Promise<boolean> {
+/**
+ * O que aparece na conversa: nada, só o que mudou arquivo, ou tudo como o Claude Code mostra.
+ * "Mudou arquivo" vale para Edit/Write e para o Bash que mexeu em arquivo (`sed -i`, `python`…),
+ * conferido no registro da atividade pelo id da chamada.
+ */
+async function changesAFile($: Engine, call: { tool: string; tool_use_id?: string }): Promise<boolean> {
+  if (EDIT_TOOLS.has(call.tool)) return true
+  if (!call.tool_use_id) return false
+  const entry = (await read($, activity)).find(one => one.id === call.tool_use_id)
+  return entry !== undefined && categoryOf(entry) === 'edit'
+}
+
+async function showsInChat($: Engine, call: { tool: string; tool_use_id?: string }): Promise<boolean> {
   const mode = await read($, chatTools)
   if (mode === 'all') return true
-  return mode === 'edits' && tools.length > 0 && tools.every(tool => EDIT_TOOLS.has(tool))
+  return mode === 'edits' && (await changesAFile($, call))
 }
 const fileLog = atom({ plugin: 'painel', key: 'fileLog' } as const, [] as FileEvent[])
 const projectRoots = atom({ plugin: 'painel', key: 'projectRoots' } as const, [] as string[])
@@ -174,6 +185,13 @@ async function openSideList($: Engine): Promise<void> {
   const opened = $.ui.open({ id: PANE, title: 'Atividade', columns: COMPACT_COLUMNS, rows: INLINE_ROWS })
   const placed = await opened
   await update($, sideListShown, () => placed.isPlaced)
+}
+
+/** Recolhe a lista; ela não reabre sozinha até a pessoa clicar em `a: atividade` na faixa. */
+async function collapseSideList($: Engine): Promise<void> {
+  await update($, sideListDismissed, () => true)
+  await update($, sideListShown, () => false)
+  await $.ui.close({ id: PANE })
 }
 
 /** Mantém a lista lateral de pé: reabre se sumiu, a menos que a pessoa a tenha fechado no ×. */
@@ -440,13 +458,13 @@ export const register: Register = on => {
 
   // As chamadas de ferramenta saem da conversa: ficam só na lista lateral, e a tecla t as traz de volta.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    if (await showsInChat($, [e.props.tool])) return next(e)
+    if (await showsInChat($, e.props)) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
 
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
-    if (await showsInChat($, [e.props.tool])) return next(e)
+    if (await showsInChat($, e.props)) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
@@ -455,7 +473,7 @@ export const register: Register = on => {
     if (e.props.isExpanded || (await read($, chatTools)) === 'all') return next(e)
     // Em modo edições, um grupo com alguma edição abre em linhas: cada chamada passa pelo filtro do
     // ToolUse sozinha, e só as edições aparecem. Grupo sem edição some inteiro.
-    if ((await read($, chatTools)) === 'edits' && e.props.calls.some(call => EDIT_TOOLS.has(call.tool))) {
+    if ((await read($, chatTools)) === 'edits' && (await Promise.all(e.props.calls.map(call => changesAFile($, call)))).some(Boolean)) {
       return next({ ...e, props: { ...e.props, isExpanded: true } })
     }
     const { Box } = $.ui.resolve(e)
@@ -674,6 +692,7 @@ export const register: Register = on => {
     const header = (
       <Box justifyContent="space-between">
         <Box gap={2}>
+          <Button key="collapse" plain hotkey="r" dimColor label="«" onPress={() => void collapseSideList($)} />
           {tabButton('activity', '1', 'Atividade')}
           {tabButton('files', '2', `Arquivos ${changedFiles.length}`)}
           {taskList.length > 0 && tabButton('tasks', '3', `Tarefas ${taskList.length - openTasks.length}/${taskList.length}`)}
