@@ -161,6 +161,20 @@ function fileChange(tool: string, input: Record<string, unknown>, path: string):
   return { path, diff: diff.slice(0, MAX_FILE_CHARS) }
 }
 
+export type PatchHunk = { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] }
+
+/** O patch que o Edit/Write devolve, com número de linha real e contexto, como diff unificado. */
+export function patchDiff(hunks: readonly PatchHunk[]): string {
+  return hunks
+    .map(hunk => [`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`, ...hunk.lines].join('\n'))
+    .join('\n')
+}
+
+export function patchStat(hunks: readonly PatchHunk[]): string {
+  const lines = hunks.flatMap(hunk => hunk.lines)
+  return `+${lines.filter(line => line.startsWith('+')).length} −${lines.filter(line => line.startsWith('-')).length}`
+}
+
 /** O tipo antes de rodar; um Bash que o Claude Code marcar como somente leitura vira leitura depois. */
 export function settleCategory(category: ActivityCategory, isReadOnly: boolean): ActivityCategory {
   return category === 'action' && isReadOnly ? 'read' : category

@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { classifyShell, classifyToolCall, isBookkeeping, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
+import { classifyShell, classifyToolCall, isBookkeeping, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
 import { bar, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
 import { activityItems, fitSegments, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
@@ -84,6 +84,11 @@ describe('classificação de comandos', () => {
 
   test('Edit guarda um diff da troca', async () => {
     expect(classifyToolCall('Edit', { file_path: '/a/b.ts', old_string: 'x', new_string: 'y' }).file?.diff).toBe('@@ -1,1 +1,1 @@\n-x\n+y')
+  })
+
+  test('patch do Edit vira diff com a linha real', async () => {
+    const hunks = [{ oldStart: 181, oldLines: 2, newStart: 181, newLines: 3, lines: [' x', '+novo', ' y'] }]
+    expect([patchDiff(hunks), patchStat(hunks)]).toEqual(['@@ -181,2 +181,3 @@\n x\n+novo\n y', '+1 −0'])
   })
 
   test('Write guarda o conteúdo escrito', async () => {
@@ -430,5 +435,19 @@ test('aba Arquivos lista o arquivo editado e mostra o diff ao abrir', async ($, 
   await ui.press({ key: 'files' })
   await ui.press({ key: 'file-open-/x/app.ts' })
   expect((await ui.find({ type: 'Code' })) !== undefined).toBe(true)
+  await ui.unmount()
+})
+
+test('diff do Edit usa o patch devolvido pela ferramenta', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('tool.call', () => ({
+    result: { structuredPatch: [{ oldStart: 40, oldLines: 1, newStart: 40, newLines: 1, lines: ['-a', '+b'] }] },
+    text: 'ok',
+  }))
+  await $.tool.call({ tool: 'Edit', tool_use_id: 'p1', file_path: '/x/y.ts', old_string: 'a', new_string: 'b' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'open-p1' })
+  const code = await ui.find({ type: 'Code' })
+  expect(JSON.stringify(code)).toContain('@@ -40,1 +40,1 @@')
   await ui.unmount()
 })

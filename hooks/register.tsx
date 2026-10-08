@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Activity, ActivityFilter, GitInfo, PaneMode, PaneTab, PrInfo, RequestGroup, Task, TaskStatus, UsageInfo } from '../types'
-import { classifyToolCall, isBookkeeping, settleCategory } from './lib/classify'
+import { classifyToolCall, isBookkeeping, patchDiff, patchStat, settleCategory, type PatchHunk } from './lib/classify'
 import { clockTime, duration, truncate } from './lib/format'
 import {
   activityItems,
@@ -278,6 +278,11 @@ export const register: Register = on => {
     const ran = await next(e)
 
     if (isTracked) {
+      const patch = (ran.result as { structuredPatch?: PatchHunk[] } | undefined)?.structuredPatch
+      const fromPatch =
+        classified.file && patch && patch.length > 0
+          ? { file: { path: classified.file.path, diff: patchDiff(patch) }, stat: patchStat(patch) }
+          : {}
       const isError = ran.deny !== undefined || ran.isError === true
       const output = (ran.deny ?? ran.text ?? '').slice(0, MAX_OUTPUT_CHARS)
       await update($, activity, list =>
@@ -289,6 +294,7 @@ export const register: Register = on => {
                 ms: Date.now() - started,
                 output,
                 category: settleCategory(classified.category, ran.isReadOnly === true),
+                ...fromPatch,
               }
             : entry,
         ),

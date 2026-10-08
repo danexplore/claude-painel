@@ -71,6 +71,25 @@ function limitLines(text: string, options: DetailOptions): { text: string; total
   return { text: (options.isFull ? lines : lines.slice(0, options.previewLines)).join('\n'), total: lines.length }
 }
 
+/** Corta o diff só entre blocos (@@): um bloco pela metade não é lido como diff. O primeiro sempre vai inteiro. */
+function limitHunks(diff: string, options: DetailOptions): { text: string; total: number } {
+  const lines = diff.split('\n')
+  if (options.isFull) return { text: diff, total: lines.length }
+  const hunks: string[][] = []
+  for (const line of lines) {
+    if (line.startsWith('@@') || hunks.length === 0) hunks.push([line])
+    else hunks[hunks.length - 1]!.push(line)
+  }
+  const kept: string[][] = []
+  let used = 0
+  for (const hunk of hunks) {
+    if (kept.length > 0 && used + hunk.length > options.previewLines) break
+    kept.push(hunk)
+    used += hunk.length
+  }
+  return { text: kept.flat().join('\n'), total: lines.length }
+}
+
 function showAllButton(kit: Kit, id: string, label: string, options: DetailOptions): RenderNode {
   const { Button } = kit
   return <Button key={`${id}-all`} plain label={label} onPress={options.onShowAll} />
@@ -118,14 +137,12 @@ function fileChangeView(kit: Kit, entry: Activity, options: DetailOptions): Rend
   const file = entry.file!
   const isMarkdown = /\.(?:md|mdx|markdown)$/i.test(file.path)
   const body = file.diff ?? file.content ?? ''
-  const { text, total } = limitLines(body, options)
-  // Um diff cortado no meio do bloco não é lido como diff; cortado, vira código comum.
-  const isCut = text.length < body.length
+  const { text, total } = file.diff !== undefined ? limitHunks(file.diff, options) : limitLines(body, options)
   return (
     <Box flexDirection="column">
       <Text dimColor>{file.path}</Text>
       {file.diff !== undefined ? (
-        <Code source={text} format={isCut ? 'source' : 'diff'} path={file.path} wrap="wrap" />
+        <Code source={text} format="diff" path={file.path} wrap="wrap" />
       ) : isMarkdown ? (
         <Markdown text={text} />
       ) : (
