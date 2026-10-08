@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Activity, ActivityFilter, FileEvent, GitInfo, PaneMode, PaneTab, PrInfo, RequestGroup, Task, TaskStatus, UsageInfo } from '../types'
+import type { Activity, ActivityFilter, FileEvent, GitInfo, ChatTools, PaneTab, PrInfo, RequestGroup, Task, TaskStatus, UsageInfo } from '../types'
 import { changesFromResult, classifyToolCall, gitNote, isBookkeeping, settleCategory, type GitOperation } from './lib/classify'
 import { cleanText, clockTime, duration, truncate } from './lib/format'
 import {
@@ -9,6 +9,8 @@ import {
   categoryOf,
   countCategories,
   countsLabel,
+  currentWork,
+  workLabel,
   groupByRequest,
   iconFor,
   readsLabel,
@@ -29,13 +31,11 @@ import { coloredStat, entryDetail, fileDiff } from './views/detail'
 const PANE = 'painel'
 const MAX_ACTIVITY = 200
 const MAX_OUTPUT_CHARS = 20_000
-const OUTPUT_PREVIEW_LINES = 40
 const GIT_EVERY_MS = 10_000
 const PR_EVERY_MS = 60_000
 const TICK_MS = 1_000
 const ACTIVITY_HOTKEY_WIDTH = 'a: atividade'.length + 4
 const COMPACT_COLUMNS = 42
-const FULL_COLUMNS = 100
 const COMPACT_TASKS = 5
 const INLINE_ROWS = 14
 const COMPACT_PREVIEW_LINES = 6
@@ -54,10 +54,19 @@ const tab = atom({ plugin: 'painel', key: 'tab' } as const, 'activity' as PaneTa
 const filter = atom({ plugin: 'painel', key: 'filter' } as const, 'all' as ActivityFilter)
 const expanded = atom({ plugin: 'painel', key: 'expanded' } as const, null as string | null)
 const showFullOutput = atom({ plugin: 'painel', key: 'showFullOutput' } as const, false)
-const paneMode = atom({ plugin: 'painel', key: 'paneMode' } as const, 'compact' as PaneMode)
 const sideListShown = atom({ plugin: 'painel', key: 'sideListShown' } as const, false)
 const sideListDismissed = atom({ plugin: 'painel', key: 'sideListDismissed' } as const, false)
-const toolsInChat = atom({ plugin: 'painel', key: 'toolsInChat' } as const, false)
+const chatTools = atom({ plugin: 'painel', key: 'chatTools' } as const, 'none' as ChatTools)
+const CHAT_TOOLS_NEXT: Record<ChatTools, ChatTools> = { none: 'edits', edits: 'all', all: 'none' }
+const CHAT_TOOLS_LABEL: Record<ChatTools, string> = { none: 'chat: nada', edits: 'chat: edições', all: 'chat: tudo' }
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+
+/** O que aparece na conversa: nada, só as edições de arquivo, ou tudo como o Claude Code mostra. */
+async function showsInChat($: Engine, tools: string[]): Promise<boolean> {
+  const mode = await read($, chatTools)
+  if (mode === 'all') return true
+  return mode === 'edits' && tools.length > 0 && tools.every(tool => EDIT_TOOLS.has(tool))
+}
 const fileLog = atom({ plugin: 'painel', key: 'fileLog' } as const, [] as FileEvent[])
 const projectRoots = atom({ plugin: 'painel', key: 'projectRoots' } as const, [] as string[])
 const requests = atom({ plugin: 'painel', key: 'requests' } as const, [] as RequestGroup[])
@@ -140,8 +149,7 @@ async function refreshPr($: Engine): Promise<void> {
 // $.ui.open vem antes de qualquer await: só uma abertura feita direto no clique conta como pedida
 // pela pessoa; depois de esperar, o engine a trata como espontânea e não a mostra abaixo de 144 colunas.
 async function openPane($: Engine, target: PaneTarget): Promise<void> {
-  const opened = $.ui.open({ id: PANE, title: 'Painel', focus: true, columns: FULL_COLUMNS })
-  await update($, paneMode, () => 'full')
+  const opened = $.ui.open({ id: PANE, title: 'Atividade', columns: COMPACT_COLUMNS, rows: INLINE_ROWS })
   await update($, tab, () => target.tab)
   if (target.filter) await update($, filter, () => target.filter!)
   if (target.expand) {
@@ -159,7 +167,6 @@ async function openPane($: Engine, target: PaneTarget): Promise<void> {
 /** A lista estreita à direita. Aberta sem clique, o engine só a mostra com 144 colunas ou mais. */
 async function openSideList($: Engine): Promise<void> {
   const opened = $.ui.open({ id: PANE, title: 'Atividade', columns: COMPACT_COLUMNS, rows: INLINE_ROWS })
-  await update($, paneMode, () => 'compact')
   const placed = await opened
   await update($, sideListShown, () => placed.isPlaced)
 }
@@ -368,25 +375,25 @@ export const register: Register = on => {
 
   // As chamadas de ferramenta saem da conversa: ficam só na lista lateral, e a tecla t as traz de volta.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    if (await read($, toolsInChat)) return next(e)
+    if (await showsInChat($, [e.props.tool])) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
 
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
-    if (await read($, toolsInChat)) return next(e)
+    if (await showsInChat($, [e.props.tool])) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
 
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
-    if (e.props.isExpanded || (await read($, toolsInChat))) return next(e)
+    if (e.props.isExpanded || (await showsInChat($, e.props.calls.map(call => call.tool)))) return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
 
   on('ui.render', { component: 'ToolProgress' }, async ($, e, next) => {
-    if (await read($, toolsInChat)) return next(e)
+    if ((await read($, chatTools)) === 'all') return next(e)
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
@@ -462,10 +469,30 @@ export const register: Register = on => {
       </Box>
     )
 
+    const work = currentWork(await read($, activity), await read($, requests))
+    const workLine = work && (
+      <Box paddingLeft={1}>
+        <Text color={work.running ? 'warning' : undefined} dimColor={work.running ? undefined : true}>
+          {work.running ? '◌ ' : '✓ '}
+        </Text>
+        <Button
+          key="work"
+          plain
+          dimColor
+          label={truncate(
+            `${workLabel(work)}${work.running ? ` · ${cleanText(work.running.label)} ${duration(currentTime - work.running.startedAt)}` : ''}`,
+            Math.max(10, width - 3),
+          )}
+          onPress={() => void openPane($, { tab: 'activity', ...(work.running ? { expand: work.running.id } : {}) })}
+        />
+      </Box>
+    )
+
     const below = await next(e)
     const isSideListShown = await read($, sideListShown)
     return (
       <Box flexDirection="column">
+        {workLine}
         {statusLine}
         {!isSideListShown && activityLine}
         {below}
@@ -487,7 +514,6 @@ export const register: Register = on => {
     const isReadsShown = await read($, showReads)
     const currentTime = (await read($, now)) || Date.now()
     const rule = <Text dimColor>{'─'.repeat(width)}</Text>
-    const isCompact = (await read($, paneMode)) === 'compact'
     const changedFiles = filesChanged(await read($, fileLog))
     const roots = await read($, projectRoots)
 
@@ -500,13 +526,12 @@ export const register: Register = on => {
     const detailFor = (entry: Activity, detailWidth: number) =>
       entryDetail(kit, entry, {
         width: detailWidth,
-        previewLines: isCompact ? COMPACT_PREVIEW_LINES : OUTPUT_PREVIEW_LINES,
+        previewLines: COMPACT_PREVIEW_LINES,
         isFull: isFullOutput,
         home: homeDir,
         roots,
-        isNarrow: isCompact,
-        onShowAll: () =>
-          void (isCompact ? openPane($, { tab: 'activity', expand: entry.id }) : update($, showFullOutput, () => true)),
+        isNarrow: true,
+        onShowAll: () => void update($, showFullOutput, () => true),
       })
 
     const entryRow = (entry: Activity, count: number, labelRoom: number) => {
@@ -562,107 +587,34 @@ export const register: Register = on => {
       </Box>
     )
 
-    if (isCompact) {
-      const isToolsInChat = await read($, toolsInChat)
-      const openTasks = taskList.filter(task => task.status !== 'completed')
-      const shownTasks = openTasks.slice(0, COMPACT_TASKS)
-      const toggled = await read($, toggledGroups)
-      const readsOpen = await read($, readsOpenIn)
-      const views = groupByRequest(list, await read($, requests))
-
-      return (
-        <Box flexDirection="column">
-          <Box justifyContent="space-between">
-            <Text bold>Atividade</Text>
-            <Box gap={2}>
-              <Button
-                key="tools-in-chat"
-                plain
-                hotkey="t"
-                dimColor
-                label={isToolsInChat ? 'tirar do chat' : 'ver no chat'}
-                onPress={() => void update($, toolsInChat, shown => !shown)}
-              />
-              {changedFiles.length > 0 && (
-                <Button
-                  key="files"
-                  plain
-                  hotkey="f"
-                  dimColor
-                  label={`arquivos ${changedFiles.length}`}
-                  onPress={() => void openPane($, { tab: 'files' })}
-                />
-              )}
-              <Button key="expand" plain hotkey="a" label="abrir" onPress={() => void openPane($, { tab: 'activity' })} />
-            </Box>
-          </Box>
-          {filters}
-          {rule}
-          {taskList.length > 0 && (
-            <Box flexDirection="column">
-              <Text dimColor>
-                Tarefas {taskList.length - openTasks.length}/{taskList.length}
-              </Text>
-              {shownTasks.map(task => (
-                <Text key={`ctask-${task.id}`} color={task.status === 'in_progress' ? 'warning' : undefined} dimColor={task.status === 'pending'}>
-                  {task.status === 'in_progress' ? '◐' : '○'} {truncate(task.subject, width - 2)}
-                </Text>
-              ))}
-              {rule}
-            </Box>
-          )}
-          {views.length === 0 && <Text dimColor>Nada por aqui ainda.</Text>}
-          {views.map((view, index) => {
-            const id = view.request.id
-            const isOpen = (index === 0) !== toggled.includes(id)
-            const areReadsOpen = isReadsShown || readsOpen.includes(id) || currentFilter === 'read'
-            const matching = view.entries.filter(entry => matchesFilter(entry, currentFilter))
-            const visible = matching.filter(entry => areReadsOpen || categoryOf(entry) !== 'read')
-            const hiddenReads = matching.length - visible.length
-            const summary = countsLabel(view.counts)
-            const since = sinceLabel(currentTime - view.request.startedAt)
-            const title = `"${truncate(view.request.text, REQUEST_TEXT_MAX)}"`
-            return (
-              <Box key={`group-${id}`} flexDirection="column" marginBottom={isOpen ? 1 : 0}>
-                <Box justifyContent="space-between">
-                  <Button
-                    key={`group-toggle-${id}`}
-                    plain
-                    dimColor={!isOpen ? true : undefined}
-                    label={`${isOpen ? '▾' : '▸'} ${title}${summary ? ` · ${summary}` : ''}`}
-                    onPress={() => void update($, toggledGroups, ids => (ids.includes(id) ? ids.filter(one => one !== id) : [...ids, id]))}
-                  />
-                  <Text dimColor>{since}</Text>
-                </Box>
-                {isOpen && (
-                  <Box flexDirection="column" paddingLeft={2}>
-                    {groupRepeats(visible).map(({ activity: entry, count }) => entryRow(entry, count, width - 4))}
-                    {hiddenReads > 0 && (
-                      <Button
-                        key={`reads-${id}`}
-                        plain
-                        dimColor
-                        label={`· ${readsLabel(hiddenReads)}`}
-                        onPress={() => void update($, readsOpenIn, ids => [...ids, id])}
-                      />
-                    )}
-                    {visible.length === 0 && hiddenReads === 0 && <Text dimColor>nada neste filtro</Text>}
-                  </Box>
-                )}
-              </Box>
-            )
-          })}
-        </Box>
-      )
-    }
-
     const currentTab = await read($, tab)
-    const tabs = (
-      <Box gap={3}>
-        <Button key="compact" plain hotkey="c" dimColor label="◂ compactar" onPress={() => void openSideList($)} />
-        <Button key="tab-activity" plain hotkey="1" dimColor={currentTab !== 'activity' ? true : undefined} label={`Atividade ${list.length}`} onPress={() => void update($, tab, () => 'activity')} />
-        <Button key="tab-tasks" plain hotkey="2" dimColor={currentTab !== 'tasks' ? true : undefined} label={`Tarefas ${taskList.length}`} onPress={() => void update($, tab, () => 'tasks')} />
-        <Button key="tab-files" plain hotkey="3" dimColor={currentTab !== 'files' ? true : undefined} label={`Arquivos ${changedFiles.length}`} onPress={() => void update($, tab, () => 'files')} />
+    const chatMode = await read($, chatTools)
+    const openTasks = taskList.filter(task => task.status !== 'completed')
+    const tabButton = (key: PaneTab, hotkey: string, label: string) => (
+      <Button
+        key={`tab-${key}`}
+        plain
+        hotkey={hotkey}
+        dimColor={currentTab !== key ? true : undefined}
+        label={label}
+        onPress={() => void update($, tab, () => key)}
+      />
+    )
+    const header = (
+      <Box justifyContent="space-between">
+        <Box gap={2}>
+          {tabButton('activity', '1', 'Atividade')}
+          {tabButton('files', '2', `Arquivos ${changedFiles.length}`)}
+          {taskList.length > 0 && tabButton('tasks', '3', `Tarefas ${taskList.length - openTasks.length}/${taskList.length}`)}
+        </Box>
+        <Button
+          key="chat-tools"
+          plain
+          hotkey="t"
+          dimColor={chatMode === 'none' ? true : undefined}
+          label={CHAT_TOOLS_LABEL[chatMode]}
+          onPress={() => void update($, chatTools, mode => CHAT_TOOLS_NEXT[mode])}
+        />
       </Box>
     )
 
@@ -671,7 +623,7 @@ export const register: Register = on => {
       const removed = changedFiles.reduce((sum, file) => sum + file.removed, 0)
       return (
         <Box flexDirection="column">
-          {tabs}
+          {header}
           {changedFiles.length > 0 && (
             <Text>
               <Text dimColor>
@@ -719,7 +671,8 @@ export const register: Register = on => {
                             <Text dimColor>── {change.at ? clockTime(change.at) : 'antes'} ──</Text>
                             {fileDiff(kit, `${change.id}-${index}`, change, {
                               width: width - 4,
-                              previewLines: OUTPUT_PREVIEW_LINES,
+                              previewLines: COMPACT_PREVIEW_LINES,
+                              isNarrow: true,
                               isFull: isFullOutput,
                               home: homeDir,
                               roots,
@@ -743,7 +696,7 @@ export const register: Register = on => {
       const glyph = { pending: '○', in_progress: '◐', completed: '●' } as const
       return (
         <Box flexDirection="column">
-          {tabs}
+          {header}
           {rule}
           {taskList.length === 0 && <Text dimColor>Nenhuma tarefa nesta sessão.</Text>}
           {taskList.map(task => (
@@ -755,29 +708,66 @@ export const register: Register = on => {
       )
     }
 
-    const TIME_COL = 6
-    const rows = [...list]
-      .reverse()
-      .filter(entry => matchesFilter(entry, currentFilter))
-      .filter(entry => isReadsShown || currentFilter === 'read' || categoryOf(entry) !== 'read' || entry.id === expandedId)
-
+    const shownTasks = openTasks.slice(0, COMPACT_TASKS)
+    const toggled = await read($, toggledGroups)
+    const readsOpen = await read($, readsOpenIn)
+    const views = groupByRequest(list, await read($, requests))
     return (
       <Box flexDirection="column">
-        {tabs}
+        {header}
         {filters}
         {rule}
-        {rows.length === 0 && <Text dimColor>Nada por aqui ainda.</Text>}
-        {rows.map((entry, index) => {
-          const time = clockTime(entry.startedAt)
-          const showTime = index === 0 || clockTime(rows[index - 1]!.startedAt) !== time
-          const elapsed = entry.status === 'running' ? currentTime - entry.startedAt : entry.ms
+        {taskList.length > 0 && (
+          <Box flexDirection="column">
+            <Text dimColor>
+              Tarefas {taskList.length - openTasks.length}/{taskList.length}
+            </Text>
+            {shownTasks.map(task => (
+              <Text key={`ctask-${task.id}`} color={task.status === 'in_progress' ? 'warning' : undefined} dimColor={task.status === 'pending'}>
+                {task.status === 'in_progress' ? '◐' : '○'} {truncate(task.subject, width - 2)}
+              </Text>
+            ))}
+            {rule}
+          </Box>
+        )}
+        {views.length === 0 && <Text dimColor>Nada por aqui ainda.</Text>}
+        {views.map((view, index) => {
+          const id = view.request.id
+          const isOpen = (index === 0) !== toggled.includes(id)
+          const areReadsOpen = isReadsShown || readsOpen.includes(id) || currentFilter === 'read'
+          const matching = view.entries.filter(entry => matchesFilter(entry, currentFilter))
+          const visible = matching.filter(entry => areReadsOpen || categoryOf(entry) !== 'read')
+          const hiddenReads = matching.length - visible.length
+          const summary = countsLabel(view.counts)
+          const since = sinceLabel(currentTime - view.request.startedAt)
+          const title = `"${truncate(view.request.text, REQUEST_TEXT_MAX)}"`
           return (
-            <Box key={`full-${entry.id}`}>
-              <Text dimColor>{(showTime ? time : '').padEnd(TIME_COL)}</Text>
-              <Box flexDirection="column" flexGrow={1}>
-                {entryRow(entry, 1, width - TIME_COL - 8)}
+            <Box key={`group-${id}`} flexDirection="column" marginBottom={isOpen ? 1 : 0}>
+              <Box justifyContent="space-between">
+                <Button
+                  key={`group-toggle-${id}`}
+                  plain
+                  dimColor={!isOpen ? true : undefined}
+                  label={`${isOpen ? '▾' : '▸'} ${title}${summary ? ` · ${summary}` : ''}`}
+                  onPress={() => void update($, toggledGroups, ids => (ids.includes(id) ? ids.filter(one => one !== id) : [...ids, id]))}
+                />
+                <Text dimColor>{since}</Text>
               </Box>
-              <Text dimColor>{(elapsed === undefined ? '' : duration(elapsed)).padStart(6)}</Text>
+              {isOpen && (
+                <Box flexDirection="column" paddingLeft={2}>
+                  {groupRepeats(visible).map(({ activity: entry, count }) => entryRow(entry, count, width - 4))}
+                  {hiddenReads > 0 && (
+                    <Button
+                      key={`reads-${id}`}
+                      plain
+                      dimColor
+                      label={`· ${readsLabel(hiddenReads)}`}
+                      onPress={() => void update($, readsOpenIn, ids => [...ids, id])}
+                    />
+                  )}
+                  {visible.length === 0 && hiddenReads === 0 && <Text dimColor>nada neste filtro</Text>}
+                </Box>
+              )}
             </Box>
           )
         })}

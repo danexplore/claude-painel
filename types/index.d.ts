@@ -68,7 +68,7 @@ export type PaneTab = 'activity' | 'tasks' | 'files'
 
 export type ActivityFilter = 'all' | 'edit' | 'action' | 'read' | 'critical'
 
-export type PaneMode = 'compact' | 'full'
+export type ChatTools = 'none' | 'edits' | 'all'
 
 declare module 'claude-code' {
   interface PluginState {
@@ -86,10 +86,9 @@ declare module 'claude-code' {
       filter: ActivityFilter
       expanded: string | null
       showFullOutput: boolean
-      paneMode: PaneMode
       sideListShown: boolean
       sideListDismissed: boolean
-      toolsInChat: boolean
+      chatTools: ChatTools
       fileLog: FileEvent[]
       /** Raízes de repositório git dos arquivos editados, para mostrar caminhos a partir do projeto. */
       projectRoots: string[]

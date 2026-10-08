@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { classifyShell, classifyToolCall, gitNote, isBookkeeping, isReadOnlyShell, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
 import { bar, cleanText, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
-import { activityItems, categoryOf, fitSegments, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
+import { activityItems, categoryOf, currentWork, fitSegments, workLabel, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
 import { withMcpFields } from '../hooks/views/detail'
 import { filesChanged, groupByProject, homePath, mergeFileEvents, projectPath } from '../hooks/lib/files'
@@ -484,6 +484,39 @@ describe('arquivos da sessão', () => {
   })
 })
 
+test('chat em modo edições mostra Edit e esconde Bash', async ($, on) => {
+  on('ui.render', () => ({ type: 'Text' as const, props: {}, children: ['nativo'] }) as never)
+  const pane = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await pane.press({ key: 'chat-tools' })
+  await pane.unmount()
+  const base = { tool_use_id: 'u', input: {}, isRunning: false, isErrored: false, isInterrupted: false }
+  const edit = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'ToolUse', props: { ...base, tool: 'Edit' } } as never)
+  const bash = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'ToolUse', props: { ...base, tool: 'Bash' } } as never)
+  expect([(await edit.find({ text: /nativo/ })) !== undefined, (await bash.find({ text: /nativo/ })) !== undefined]).toEqual([true, false])
+  await edit.unmount()
+  await bash.unmount()
+})
+
+describe('trabalho do pedido atual', () => {
+  const at = (id: string, category: Activity['category'], status: Activity['status'] = 'ok'): Activity => ({
+    id, startedAt: 0, kind: 'plain', category, groupId: 'r2', label: id, detail: id, status, ...(category === 'edit' ? { stat: '+1 −0' } : {}),
+  })
+  const requests = [{ id: 'r1', text: 'a', startedAt: 0 }, { id: 'r2', text: 'b', startedAt: 1 }]
+
+  test('conta só o pedido mais recente', async () => {
+    const work = currentWork([{ ...at('x', 'action'), groupId: 'r1' }, at('e', 'edit'), at('a', 'action'), at('l', 'read')], requests)
+    expect(workLabel(work!)).toBe('1 edição · 1 ação · 1 leitura')
+  })
+
+  test('aponta a chamada que está rodando', async () => {
+    expect(currentWork([at('a', 'action'), at('b', 'action', 'running')], requests)?.running?.id).toBe('b')
+  })
+
+  test('sem chamadas no pedido atual não mostra nada', async () => {
+    expect(currentWork([{ ...at('x', 'action'), groupId: 'r1' }], requests)).toBe(null)
+  })
+})
+
 describe('edição só com mudança', () => {
   const base: Activity = { id: 'c1', startedAt: 0, kind: 'plain', category: 'edit', groupId: 'g', label: 'python3 - <<EOF', detail: 'python3 - <<EOF', status: 'ok' }
 
@@ -519,7 +552,7 @@ test('aba Arquivos lista o arquivo editado e mostra o diff ao abrir', async ($, 
   on('tool.call', () => ({ result: {}, text: 'ok' }))
   await $.tool.call({ tool: 'Edit', tool_use_id: 'e1', file_path: '/x/app.ts', old_string: 'a', new_string: 'b' } as never)
   const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
-  await ui.press({ key: 'files' })
+  await ui.press({ key: 'tab-files' })
   await ui.press({ key: 'file-open-/x/app.ts' })
   expect((await ui.find({ type: 'Code' })) !== undefined).toBe(true)
   expect((await ui.find({ text: /fora de projeto/ })) !== undefined).toBe(true)
@@ -533,7 +566,7 @@ test('aba Arquivos agrupa pelo projeto do git e mostra o caminho a partir da rai
   on('process.run', () => ({ value: { exitCode: 0, stdout: '/r/painel-dev\n', stderr: '' } }) as never)
   await $.tool.call({ tool: 'Edit', tool_use_id: 'g1', file_path: '/r/painel-dev/hooks/a.ts', old_string: 'a', new_string: 'b' } as never)
   const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
-  await ui.press({ key: 'files' })
+  await ui.press({ key: 'tab-files' })
   const found = [await ui.find({ text: /^painel-dev$/ }), await ui.find({ text: /^\.\/hooks\/a\.ts$/ })]
   expect(found.map(node => node !== undefined)).toEqual([true, true])
   await ui.unmount()

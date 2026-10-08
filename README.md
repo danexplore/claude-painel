@@ -3,12 +3,13 @@
 Um mod para o Claude Code (terminal, modo tela cheia) que tira as chamadas de ferramenta da conversa e as organiza num painel ao lado, com o uso da sessão numa faixa acima do prompt.
 
 ```
+◌ 2 edições · 7 ações · 12 leituras · Roda os testes 4s
 ◑ 258k/1M 26%  5h ▰▱▱▱▱ 8%  7d ▰▰▱▱▱ 29%  ⎇ app·main ●3 ↑1  PR #412 ✓✓✗  ⚠ 1  ◷ 47m·21t
 ```
 
 ```
-Atividade                      t: ver no chat  f: arquivos 4  a: abrir
-✎ edição 12  ▶ ação 8  leitura ○  ⚠ 1
+Atividade  Arquivos 4  Tarefas 2/5       chat: nada
+todos 20  ✎ edição 12  ▶ ação 8  leitura ○  ⚠ 1
 ──────────────────────────────────────────
 ▾ "corrige o login" · 3 edições · 2 ações             agora
   ✎ auth.ts +40 −12
@@ -20,6 +21,7 @@ Atividade                      t: ver no chat  f: arquivos 4  a: abrir
 ## O que faz
 
 **Faixa acima do prompt**
+- O que o Claude está fazendo no pedido atual: quantas edições, ações e leituras, e o comando que está rodando. Clicar abre a chamada.
 - Contexto usado (`usado/total %`), limites de 5h e 7d com barra. A cor muda quando você está gastando mais rápido que o tempo passa.
 - Repositório, branch, arquivos modificados, à frente/atrás da origem.
 - PR da branch com os checks do CI e a revisão (via `gh`).
@@ -32,7 +34,9 @@ Atividade                      t: ver no chat  f: arquivos 4  a: abrir
 - Clicar expande ali mesmo: comando, saída com `⎿`, e o diff de cada arquivo que mudou, com a linha real.
 - `execute_sql` do Supabase: query com cores e resultado como tabela ou registros, sem o envelope.
 - Write mostra o conteúdo com cores; `.md` aparece renderizado.
-- `t` devolve as chamadas para a conversa; `f` abre a aba **Arquivos** com tudo que foi editado na sessão, sem depender de git.
+- `t` escolhe o que aparece na conversa: nada, só as edições de arquivo, ou tudo.
+- Abas **Atividade**, **Arquivos** (tudo que foi editado na sessão, agrupado por projeto, caminhos a partir da raiz) e **Tarefas**.
+- Fechar no `×` recolhe a lista; `a: atividade` na faixa reabre.
 
 ## Instalar
 

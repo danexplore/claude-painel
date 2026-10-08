@@ -343,3 +343,19 @@ export function sinceLabel(ms: number): string {
   if (minutes < 60) return `${minutes}min`
   return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}`
 }
+
+export type WorkSummary = { counts: CategoryCounts; total: number; running: Activity | undefined }
+
+/** O que o Claude fez no pedido atual: some do chat com as ferramentas escondidas, então a faixa conta. */
+export function currentWork(activity: Activity[], requests: RequestGroup[]): WorkSummary | null {
+  const latest = requests[requests.length - 1]
+  if (!latest) return null
+  const entries = activity.filter(entry => groupIdOf(entry) === latest.id)
+  if (entries.length === 0) return null
+  return { counts: countCategories(entries), total: entries.length, running: [...entries].reverse().find(entry => entry.status === 'running') }
+}
+
+export function workLabel(work: WorkSummary): string {
+  const parts = [countsLabel(work.counts), work.counts.read ? readsLabel(work.counts.read) : ''].filter(Boolean)
+  return parts.join(' · ')
+}
