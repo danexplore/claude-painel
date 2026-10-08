@@ -5,6 +5,7 @@ import { bar, cleanText, compactTokens, duration, limitLevel, truncate } from '.
 import { activityItems, fitSegments, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
 import { filesChanged, homePath, mergeFileEvents } from '../hooks/lib/files'
+import { markdownBlocks, plainInline } from '../hooks/lib/markdown'
 import { parseGitStatus, parsePrView } from '../hooks/lib/parse'
 import type { Activity } from '../types'
 
@@ -527,5 +528,64 @@ test('na lista estreita o arquivo mudado aparece com caminho curto', async ($, o
   const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
   await ui.press({ key: 'open-n1' })
   expect((await ui.find({ text: /…\/\.claude-plugin\/plugin\.json/ })) !== undefined).toBe(true)
+  await ui.unmount()
+})
+
+describe('markdown', () => {
+  const sample = [
+    '---',
+    'name: painel',
+    'version: "1.0"',
+    '---',
+    '# Título **forte**',
+    '',
+    'Texto com `código`.',
+    '',
+    '```bash',
+    'echo oi',
+    '```',
+    '',
+    '| nome | total |',
+    '|------|------:|',
+    '| a    | 12    |',
+    '',
+    '> uma citação',
+  ].join('\n')
+
+  test('separa front-matter, título, prosa, código, tabela e citação', async () => {
+    expect(markdownBlocks(sample).map(block => block.kind)).toEqual(['frontmatter', 'heading', 'prose', 'code', 'table', 'quote'])
+  })
+
+  test('título perde a marcação inline', async () => {
+    expect(markdownBlocks('# Título **forte**')).toEqual([{ kind: 'heading', level: 1, text: 'Título forte' }])
+  })
+
+  test('bloco de código guarda linguagem e conteúdo', async () => {
+    expect(markdownBlocks('```ts\nconst a = 1\n```')).toEqual([{ kind: 'code', language: 'ts', source: 'const a = 1' }])
+  })
+
+  test('tabela lê alinhamento à direita', async () => {
+    const [table] = markdownBlocks('| a | b |\n|---|--:|\n| 1 | 2 |')
+    expect(table).toEqual({ kind: 'table', header: ['a', 'b'], alignRight: [false, true], rows: [['1', '2']] })
+  })
+
+  test('bloco de código sem fechamento vai até o fim', async () => {
+    expect(markdownBlocks('```\na\nb')).toEqual([{ kind: 'code', language: '', source: 'a\nb' }])
+  })
+
+  test('link vira só o texto', async () => {
+    expect(plainInline('[docs](https://x.y) e **b**')).toBe('docs e b')
+  })
+})
+
+test('README escrito aparece com bloco de código e tabela desenhados', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  const readme = '# Título\n\nTexto.\n\n```bash\nnpm i\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |'
+  on('tool.call', () => ({ result: { type: 'create', filePath: '/x/README.md', content: readme, structuredPatch: [] }, text: 'ok' }))
+  await $.tool.call({ tool: 'Write', tool_use_id: 'md1', file_path: '/x/README.md', content: readme } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'open-md1' })
+  const found = [await ui.find({ type: 'Code' }), await ui.find({ text: /Título/ }), await ui.find({ text: /1\s+2/ })]
+  expect(found.map(node => node !== undefined)).toEqual([true, true, true])
   await ui.unmount()
 })

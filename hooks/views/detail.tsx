@@ -3,6 +3,7 @@ import type { Elements, RenderNode } from 'claude-code'
 import type { Activity, FileChange } from '../../types'
 import { changesOf, diffCounts, homePath } from '../lib/files'
 import { cleanText, truncate } from '../lib/format'
+import { markdownView } from './markdown'
 import {
   COLUMN_GAP,
   MAX_ROWS,
@@ -71,6 +72,8 @@ function displayPath(path: string, options: DetailOptions): string {
 const TREE = '⎿ '
 /** Quando o comando mudou arquivos, o diff é o que importa; a saída fica em poucas linhas. */
 const CHANGED_OUTPUT_LINES = 3
+/** Um arquivo novo (README, plano, spec) merece mais que a prévia curta de uma saída. */
+const CONTENT_PREVIEW_LINES = 20
 
 const GAP = ' '.repeat(COLUMN_GAP)
 
@@ -174,10 +177,11 @@ function mcpOutput(kit: Kit, entry: Activity, options: DetailOptions): RenderNod
 }
 
 export function fileDiff(kit: Kit, id: string, change: FileChange, options: DetailOptions): RenderNode {
-  const { Box, Text, Code, Markdown } = kit
+  const { Box, Text, Code } = kit
   const file = cleanChange(change)
   const isMarkdown = /\.(?:md|mdx|markdown)$/i.test(file.path)
-  const { text, total } = file.diff !== undefined ? limitHunks(file.diff, options) : limitLines(file.content ?? '', options)
+  const contentOptions = { ...options, previewLines: Math.max(options.previewLines, CONTENT_PREVIEW_LINES) }
+  const { text, total } = file.diff !== undefined ? limitHunks(file.diff, options) : limitLines(file.content ?? '', contentOptions)
   const counts = file.diff !== undefined ? diffCounts(file.diff) : undefined
   const verb = file.diff !== undefined ? 'Atualizou' : 'Criou'
   const stat = counts ? `(+${counts.added} −${counts.removed})` : `(${total} linhas)`
@@ -193,11 +197,11 @@ export function fileDiff(kit: Kit, id: string, change: FileChange, options: Deta
         {file.diff !== undefined ? (
           <Code source={text} format="diff" path={file.path} wrap={codeWrap(options)} />
         ) : isMarkdown ? (
-          <Markdown text={text} />
+          markdownView(kit, `${id}-${file.path}-md`, text, { width: Math.max(20, options.width - 2), isNarrow: options.isNarrow === true })
         ) : (
           <Code source={text} path={file.path} wrap={codeWrap(options)} />
         )}
-        {!options.isFull && total > options.previewLines && showAllButton(kit, `${id}-${file.path}`, `… +${total - options.previewLines} linhas · ver tudo`, options)}
+        {!options.isFull && text.split('\n').length < total && showAllButton(kit, `${id}-${file.path}`, `… +${total - text.split('\n').length} linhas · ver tudo`, options)}
       </Box>
     </Box>
   )
@@ -264,7 +268,8 @@ export function entryDetail(kit: Kit, rawEntry: Activity, options: DetailOptions
   const entry = cleanEntry(rawEntry)
   const { Box, Text } = kit
   const files = changesOf(entry).filter(file => !options.onlyPath || file.path === options.onlyPath)
-  if (entry.file) {
+  const isFileTool = entry.tool !== undefined ? entry.tool !== 'Bash' : entry.detail.startsWith('/')
+  if (entry.file || (files.length > 0 && isFileTool)) {
     return (
       <Box key={`${entry.id}-detail`} flexDirection="column" paddingBottom={1}>
         {files.map(file => fileDiff(kit, entry.id, file, options))}

@@ -287,7 +287,7 @@ export const register: Register = on => {
     if (isTracked) {
       const groupId = (await read($, requests)).at(-1)?.id ?? 'inicio'
       await update($, activity, list =>
-        [...list, { id, startedAt: started, status: 'running' as const, groupId, ...classified }].slice(-MAX_ACTIVITY),
+        [...list, { id, startedAt: started, status: 'running' as const, groupId, tool: String(e.tool), ...classified }].slice(-MAX_ACTIVITY),
       )
       await update($, now, () => started)
       ensureTicker($)

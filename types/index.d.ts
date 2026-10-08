@@ -10,6 +10,7 @@ export type Activity = {
   id: string
   startedAt: number
   kind: ActivityKind
+  tool?: string
   category: ActivityCategory
   groupId: string
   label: string
