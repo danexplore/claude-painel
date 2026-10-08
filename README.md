@@ -21,10 +21,11 @@ todos 20  ✎ edição 12  ▶ ação 8  leitura ○  ⚠ 1
 ## O que faz
 
 **Faixa acima do prompt**
-- O que o Claude está fazendo no pedido atual: quantas edições, ações e leituras, e o comando que está rodando. Clicar abre a chamada.
+- Duas linhas. A segunda junta o que o Claude fez no pedido atual (`4✎ 14▶ 5· ◇1`) com os últimos comandos; clicar abre a chamada.
 - Contexto usado (`usado/total %`), limites de 5h e 7d com barra. A cor muda quando você está gastando mais rápido que o tempo passa.
 - Repositório, branch, arquivos modificados, à frente/atrás da origem.
 - PR da branch com os checks do CI e a revisão (via `gh`).
+- Com o [secrets-veil](https://github.com/yonatangross/orchestkit) instalado, o rodapé dele vira um `◈ N` aqui (a máscara continua igual).
 - Contador de comandos críticos não vistos (`rm -rf`, `push --force`, `reset --hard`, `supabase db push`, `DROP`/`TRUNCATE`, `prod`…).
 
 **Lista lateral (aberta sozinha a partir de 144 colunas)**

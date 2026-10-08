@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { agentIdFromOutput, classifyShell, classifyToolCall, gitNote, isBookkeeping, isReadOnlyShell, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
 import { bar, cleanText, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
-import { activityItems, arrangeWithAgents, categoryOf, currentWork, fitSegments, workLabel, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
+import { activityItems, arrangeWithAgents, categoryOf, currentWork, fitSegments, workLabel, compactWorkLabel, maskedCount, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
 import { withMcpFields } from '../hooks/views/detail'
 import { filesChanged, groupByProject, homePath, mergeFileEvents, projectPath } from '../hooks/lib/files'
@@ -315,6 +315,20 @@ test('comando crítico aparece fixado na faixa e no contador', async ($, on) => 
   const counter = await ui.find({ key: 'seg-critical' })
   const pinned = await ui.find({ type: 'Button', text: /git push --force/ })
   expect([counter?.text, pinned !== undefined]).toEqual(['⚠ 1', true])
+  await ui.unmount()
+})
+
+test('faixa junta contagem e comandos numa linha só', async ($, on) => {
+  mock.clock(on)
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
+  await $.prompt.submit({ text: 'roda o gh' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'gh --version' })
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+  const count = await ui.find({ key: 'work-count' })
+  const item = await ui.find({ type: 'Button', text: /gh --version/ })
+  expect([count?.text, item !== undefined]).toEqual(['1▶', true])
   await ui.unmount()
 })
 
@@ -814,4 +828,21 @@ test('README escrito aparece com bloco de código e tabela desenhados', async ($
   const found = [await ui.find({ type: 'Code' }), await ui.find({ text: /Título/ }), await ui.find({ text: /1\s+2/ })]
   expect(found.map(node => node !== undefined)).toEqual([true, true, true])
   await ui.unmount()
+})
+
+describe('faixa compacta', () => {
+  test('contagem curta junta edições, ações, leituras e agentes', () => {
+    const work = { counts: { edit: 4, action: 14, read: 5 }, total: 23, running: undefined }
+    expect(compactWorkLabel(work, 1)).toBe('4✎ 14▶ 5· ◇1')
+  })
+
+  test('lê o número do rodapé do secrets-veil', () => {
+    expect([maskedCount('11 masked this session'), maskedCount('outra coisa'), maskedCount(undefined)]).toEqual([11, undefined, undefined])
+  })
+
+  test('segmento ◈ aparece só com segredos mascarados', () => {
+    const base = { usage: null, git: null, pr: null, tasks: [], unseenCritical: 0, startedAt: 0, turns: 0, now: 0 }
+    const ids = (masked?: number) => statusSegments({ ...base, masked }).map(segment => segment.id)
+    expect([ids(3), ids(0)]).toEqual([['veil'], []])
+  })
 })

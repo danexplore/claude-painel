@@ -10,7 +10,8 @@ import {
   countCategories,
   countsLabel,
   currentWork,
-  workLabel,
+  compactWorkLabel,
+  maskedCount,
   groupByRequest,
   iconFor,
   readsLabel,
@@ -88,6 +89,7 @@ async function showsInChat($: Engine, call: { tool: string; tool_use_id?: string
 const fileLog = atom({ plugin: 'painel', key: 'fileLog' } as const, [] as FileEvent[])
 const projectRoots = atom({ plugin: 'painel', key: 'projectRoots' } as const, [] as string[])
 const requests = atom({ plugin: 'painel', key: 'requests' } as const, [] as RequestGroup[])
+const veilMasked = atom({ plugin: 'painel', key: 'veilMasked' } as const, 0)
 const showReads = atom({ plugin: 'painel', key: 'showReads' } as const, false)
 const toggledGroups = atom({ plugin: 'painel', key: 'toggledGroups' } as const, [] as string[])
 const readsOpenIn = atom({ plugin: 'painel', key: 'readsOpenIn' } as const, [] as string[])
@@ -488,6 +490,15 @@ export const register: Register = on => {
     return <Box />
   })
 
+  // O rodapé do secrets-veil vira um `◈ N` na faixa: a máscara segue igual, só a linha própria sai.
+  on('ui.status', async ($, e, next) => {
+    if (!next.origin.plugin.includes('secrets-veil')) return next(e)
+    const count = maskedCount(e.text)
+    if (count === undefined) return next(e)
+    await update($, veilMasked, () => count)
+    return { value: undefined }
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
@@ -510,6 +521,7 @@ export const register: Register = on => {
         startedAt: await read($, startedAt),
         turns: await read($, turns),
         now: currentTime,
+        masked: await read($, veilMasked),
       }),
       width,
     )
@@ -531,16 +543,37 @@ export const register: Register = on => {
       </Box>
     )
 
+    const work = currentWork(await read($, activity), await read($, requests))
+    const agentsRunning = runningAgents(await read($, agents))
+    const isSideListShown = await read($, sideListShown)
+    const counter = work ? compactWorkLabel(work, agentsRunning) : ''
+    const counterWidth = counter ? counter.length + 5 : 0
     const isReadsShown = await read($, showReads)
+    // Com a lista lateral aberta os comandos já estão nela: fica só o que está rodando agora.
     const items = activityItems(
-      (await read($, activity)).filter(entry => isReadsShown || categoryOf(entry) !== 'read'),
-      await read($, unseenCritical),
-      Math.max(0, width - ACTIVITY_HOTKEY_WIDTH),
+      (await read($, activity)).filter(entry => (isReadsShown || categoryOf(entry) !== 'read') && (!isSideListShown || entry.status === 'running')),
+      isSideListShown ? [] : await read($, unseenCritical),
+      Math.max(0, width - ACTIVITY_HOTKEY_WIDTH - counterWidth),
       currentTime,
     )
 
     const activityLine = (
       <Box columnGap={3} paddingLeft={1}>
+        {work && (
+          <Box key="work">
+            <Text color={work.running ? 'warning' : undefined} dimColor={work.running ? undefined : true}>
+              {work.running ? '◌ ' : '✓ '}
+            </Text>
+            <Button
+              key="work-count"
+              plain
+              dimColor
+              label={counter || 'nada ainda'}
+              onPress={() => void openPane($, { tab: 'activity', ...(work.running ? { expand: work.running.id } : {}) })}
+            />
+            <Text dimColor> │</Text>
+          </Box>
+        )}
         {items.map(item => (
           <Box key={`item-${item.activity.id}`}>
             {renderPiece(item.icon, `icon-${item.activity.id}`)}
@@ -555,37 +588,15 @@ export const register: Register = on => {
             {item.suffix && renderPiece(item.suffix, `suffix-${item.activity.id}`)}
           </Box>
         ))}
-        <Button key="open-activity" plain hotkey="a" label="atividade" onPress={() => void openPane($, { tab: 'activity' })} />
-      </Box>
-    )
-
-    const work = currentWork(await read($, activity), await read($, requests))
-    const agentsRunning = runningAgents(await read($, agents))
-    const workLine = work && (
-      <Box paddingLeft={1}>
-        <Text color={work.running ? 'warning' : undefined} dimColor={work.running ? undefined : true}>
-          {work.running ? '◌ ' : '✓ '}
-        </Text>
-        <Button
-          key="work"
-          plain
-          dimColor
-          label={truncate(
-            `${workLabel(work)}${agentsRunning ? ` · ◇ ${agentsRunning} ${agentsRunning === 1 ? 'agente' : 'agentes'}` : ''}${work.running ? ` · ${cleanText(work.running.label)} ${duration(currentTime - work.running.startedAt)}` : ''}`,
-            Math.max(10, width - 3),
-          )}
-          onPress={() => void openPane($, { tab: 'activity', ...(work.running ? { expand: work.running.id } : {}) })}
-        />
+        {!isSideListShown && <Button key="open-activity" plain hotkey="a" label="atividade" onPress={() => void openPane($, { tab: 'activity' })} />}
       </Box>
     )
 
     const below = await next(e)
-    const isSideListShown = await read($, sideListShown)
     return (
       <Box flexDirection="column">
-        {workLine}
         {statusLine}
-        {!isSideListShown && activityLine}
+        {(work || !isSideListShown) && activityLine}
         {below}
       </Box>
     )

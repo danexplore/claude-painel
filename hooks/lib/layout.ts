@@ -101,6 +101,8 @@ export type StatusData = {
   startedAt: number
   turns: number
   now: number
+  /** Segredos que o secrets-veil mascarou, tirado do rodapé dele; ausente sem o plugin. */
+  masked?: number
 }
 
 function usageSegments(usage: UsageInfo | null, now: number): Segment[] {
@@ -202,6 +204,9 @@ export function statusSegments(data: StatusData): Segment[] {
       pieces: [{ text: `⚠ ${data.unseenCritical}`, tone: 'high', bold: true }],
       target: { tab: 'activity', filter: 'critical' },
     })
+  }
+  if (data.masked) {
+    segments.push({ id: 'veil', priority: 3, pieces: [{ text: `◈ ${data.masked}`, tone: 'dim' }] })
   }
   if (data.startedAt > 0) {
     segments.push({
@@ -353,6 +358,23 @@ export function currentWork(activity: Activity[], requests: RequestGroup[]): Wor
   const entries = activity.filter(entry => groupIdOf(entry) === latest.id)
   if (entries.length === 0) return null
   return { counts: countCategories(entries), total: entries.length, running: [...entries].reverse().find(entry => entry.status === 'running') }
+}
+
+/** A contagem do pedido em poucas colunas, para dividir a linha com os comandos: `4✎ 14▶ 5·`. */
+export function compactWorkLabel(work: WorkSummary, agentsRunning: number): string {
+  const parts = [
+    work.counts.edit ? `${work.counts.edit}✎` : '',
+    work.counts.action ? `${work.counts.action}▶` : '',
+    work.counts.read ? `${work.counts.read}·` : '',
+    agentsRunning ? `◇${agentsRunning}` : '',
+  ].filter(Boolean)
+  return parts.join(' ')
+}
+
+/** O número do rodapé do secrets-veil (`11 masked this session`); undefined quando não é dele. */
+export function maskedCount(text: string | undefined): number | undefined {
+  const match = text?.match(/(\d+)\s+masked/)
+  return match ? Number(match[1]) : undefined
 }
 
 export function workLabel(work: WorkSummary): string {

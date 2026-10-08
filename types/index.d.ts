@@ -101,6 +101,7 @@ declare module 'claude-code' {
       showFullOutput: boolean
       sideListShown: boolean
       sideListDismissed: boolean
+      veilMasked: number
       chatTools: ChatTools
       agents: SubAgent[]
       fileLog: FileEvent[]
