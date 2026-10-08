@@ -1,6 +1,6 @@
 {
   "name": "painel",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "author": { "name": "daniel-moreira-batista" },
   "description": "Faixa compacta com uso, git, PR, tarefas e atividade do Claude, com painel de detalhes clicável",
   "types": "./types/index.d.ts"

@@ -1,13 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Activity, ActivityFilter, GitInfo, PaneTab, PrInfo, Task, TaskStatus, UsageInfo } from '../types'
+import type { Activity, ActivityFilter, GitInfo, PaneMode, PaneTab, PrInfo, Task, TaskStatus, UsageInfo } from '../types'
 import { classifyToolCall, isBookkeeping } from './lib/classify'
 import { clockTime, duration, truncate } from './lib/format'
 import {
   KIND_ICON,
   activityItems,
   fitSegments,
+  groupRepeats,
+  repeatSuffix,
   matchesFilter,
   statusSegments,
   type PaneTarget,
@@ -24,6 +26,9 @@ const GIT_EVERY_MS = 10_000
 const PR_EVERY_MS = 60_000
 const TICK_MS = 1_000
 const ACTIVITY_HOTKEY_WIDTH = 'a: atividade'.length + 4
+const COMPACT_COLUMNS = 42
+const FULL_COLUMNS = 100
+const COMPACT_TASKS = 5
 
 const activity = atom({ plugin: 'painel', key: 'activity' } as const, [] as Activity[])
 const unseenCritical = atom({ plugin: 'painel', key: 'unseenCritical' } as const, [] as string[])
@@ -38,6 +43,9 @@ const tab = atom({ plugin: 'painel', key: 'tab' } as const, 'activity' as PaneTa
 const filter = atom({ plugin: 'painel', key: 'filter' } as const, 'all' as ActivityFilter)
 const expanded = atom({ plugin: 'painel', key: 'expanded' } as const, null as string | null)
 const showFullOutput = atom({ plugin: 'painel', key: 'showFullOutput' } as const, false)
+const paneMode = atom({ plugin: 'painel', key: 'paneMode' } as const, 'compact' as PaneMode)
+const sideListShown = atom({ plugin: 'painel', key: 'sideListShown' } as const, false)
+const sideListDismissed = atom({ plugin: 'painel', key: 'sideListDismissed' } as const, false)
 
 const TONE_STYLE: Record<Tone, { color?: string; dimColor?: boolean }> = {
   normal: {},
@@ -108,13 +116,24 @@ async function refreshPr($: Engine): Promise<void> {
 // $.ui.open vem antes de qualquer await: só uma abertura feita direto no clique conta como pedida
 // pela pessoa; depois de esperar, o engine a trata como espontânea e não a mostra abaixo de 144 colunas.
 async function openPane($: Engine, target: PaneTarget): Promise<void> {
-  const opened = $.ui.open({ id: PANE, title: 'Painel', focus: true, closeOnEscape: true })
+  const opened = $.ui.open({ id: PANE, title: 'Painel', focus: true, columns: FULL_COLUMNS })
+  await update($, paneMode, () => 'full')
   await update($, tab, () => target.tab)
   if (target.filter) await update($, filter, () => target.filter!)
   if (target.expand) await update($, expanded, () => target.expand!)
   await update($, unseenCritical, () => [])
+  await update($, sideListDismissed, () => false)
   const placed = await opened
+  await update($, sideListShown, () => placed.isPlaced)
   if (!placed.isPlaced) $.ui.toast(`Painel não abriu: ${placed.reason}`)
+}
+
+/** A lista estreita à direita. Aberta sem clique, o engine só a mostra com 144 colunas ou mais. */
+async function openSideList($: Engine): Promise<void> {
+  const opened = $.ui.open({ id: PANE, title: 'Atividade', columns: COMPACT_COLUMNS })
+  await update($, paneMode, () => 'compact')
+  const placed = await opened
+  await update($, sideListShown, () => placed.isPlaced)
 }
 
 function recordTask(list: Task[], id: string, change: Partial<Task>): Task[] {
@@ -161,7 +180,16 @@ export const register: Register = on => {
     $.clock.every(GIT_EVERY_MS, () => void syncGit($))
     $.clock.every(PR_EVERY_MS, () => void refreshPr($))
     $.clock.every(60_000, () => void update($, now, () => Date.now()))
+    if (!(await read($, sideListDismissed))) await openSideList($)
     return result
+  })
+
+  on('ui.close', async ($, e, next) => {
+    if (e.id === PANE) {
+      await update($, sideListShown, () => false)
+      if (e.origin.kind === 'person') await update($, sideListDismissed, () => true)
+    }
+    return next(e)
   })
 
   on('command.run', { command: 'painel' }, async $ => {
@@ -304,10 +332,11 @@ export const register: Register = on => {
     )
 
     const below = await next(e)
+    const isSideListShown = await read($, sideListShown)
     return (
       <Box flexDirection="column">
         {statusLine}
-        {activityLine}
+        {!isSideListShown && activityLine}
         {below}
       </Box>
     )
@@ -323,11 +352,78 @@ export const register: Register = on => {
     const expandedId = await read($, expanded)
     const isFullOutput = await read($, showFullOutput)
     const currentTime = (await read($, now)) || Date.now()
-
     const rule = <Text dimColor>{'─'.repeat(width)}</Text>
+
+    if ((await read($, paneMode)) === 'compact') {
+      const openTasks = taskList.filter(task => task.status !== 'completed')
+      const doneTasks = taskList.length - openTasks.length
+      const counts = (['critical', 'mcp', 'cli'] as const)
+        .map(kind => ({ kind, total: list.filter(entry => entry.kind === kind).length }))
+        .filter(({ total }) => total > 0)
+      const shownTasks = openTasks.slice(0, COMPACT_TASKS)
+      const headerRows = 3 + (taskList.length > 0 ? shownTasks.length + 2 : 0)
+      const room = Math.max(3, (e.viewport?.rows ?? 30) - headerRows)
+      const groups = groupRepeats([...list].reverse()).slice(0, room)
+
+      return (
+        <Box flexDirection="column">
+          <Box justifyContent="space-between">
+            <Text bold>Atividade</Text>
+            <Button key="expand" plain hotkey="a" label="abrir" onPress={() => void openPane($, { tab: 'activity' })} />
+          </Box>
+          <Box gap={2}>
+            {counts.length === 0 && <Text dimColor>{list.length} chamadas</Text>}
+            {counts.map(({ kind, total }) => (
+              <Text key={`count-${kind}`} {...TONE_STYLE[kind === 'critical' ? 'high' : kind]}>
+                {KIND_ICON[kind]} {total}
+              </Text>
+            ))}
+          </Box>
+          {rule}
+          {taskList.length > 0 && (
+            <Box flexDirection="column">
+              <Text dimColor>
+                Tarefas {doneTasks}/{taskList.length}
+              </Text>
+              {shownTasks.map(task => (
+                <Text key={`ctask-${task.id}`} color={task.status === 'in_progress' ? 'warning' : undefined} dimColor={task.status === 'pending'}>
+                  {task.status === 'in_progress' ? '◐' : '○'} {truncate(task.subject, width - 2)}
+                </Text>
+              ))}
+              {rule}
+            </Box>
+          )}
+          {groups.length === 0 && <Text dimColor>Nada por aqui ainda.</Text>}
+          {groups.map(({ activity: entry, count }) => {
+            const isRunning = entry.status === 'running'
+            const isError = entry.status === 'error'
+            const icon = isRunning ? '▶' : isError ? '✗' : KIND_ICON[entry.kind]
+            const tone: Tone = isRunning ? 'warn' : isError || entry.kind === 'critical' ? 'high' : entry.kind === 'plain' ? 'dim' : entry.kind
+            const tail = isRunning ? ` ${duration(currentTime - entry.startedAt)}` : repeatSuffix(count)
+            const label = truncate(entry.label, Math.max(4, width - 2 - tail.length))
+            return (
+              <Box key={`crow-${entry.id}`}>
+                <Text {...TONE_STYLE[tone]} bold={entry.kind === 'critical'}>
+                  {icon}{' '}
+                </Text>
+                <Button
+                  key={`copen-${entry.id}`}
+                  plain
+                  dimColor={entry.kind === 'plain' && !isError ? true : undefined}
+                  label={label}
+                  onPress={() => void openPane($, { tab: 'activity', filter: 'all', expand: entry.id })}
+                />
+                {tail && <Text dimColor>{tail}</Text>}
+              </Box>
+            )
+          })}
+        </Box>
+      )
+    }
 
     const tabs = (
       <Box gap={3}>
+        <Button key="compact" plain hotkey="c" dimColor label="◂ compactar" onPress={() => void openSideList($)} />
         <Button key="tab-activity" plain hotkey="1" dimColor={currentTab !== 'activity' ? true : undefined} label={`Atividade ${list.length}`} onPress={() => void update($, tab, () => 'activity')} />
         <Button key="tab-tasks" plain hotkey="2" dimColor={currentTab !== 'tasks' ? true : undefined} label={`Tarefas ${taskList.length}`} onPress={() => void update($, tab, () => 'tasks')} />
       </Box>

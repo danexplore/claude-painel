@@ -60,8 +60,18 @@ export function classifyShell(command: string): ActivityKind {
 
 const LEADING_CD = /^\s*cd\s+(?:"[^"]*"|'[^']*'|\S+)\s*&&\s*/
 
+const LONG_PATH = /(?:~|\.{1,2})?\/(?:[^\s'"\/]+\/){2,}[^\s'"\/]*/g
+
+/** `~/.claude/mods/painel/hooks/lib` vira `…/hooks/lib`: as duas últimas partes dizem o bastante. */
+export function shortenPaths(text: string): string {
+  return text.replace(LONG_PATH, path => {
+    const parts = path.split('/').filter(Boolean)
+    return parts.length <= 2 ? path : `…/${parts.slice(-2).join('/')}`
+  })
+}
+
 export function shellLabel(command: string): string {
-  return oneLine(stripRtk(command).replace(LEADING_CD, ''))
+  return shortenPaths(oneLine(stripRtk(command).replace(LEADING_CD, '')))
 }
 
 const BOOKKEEPING_TOOLS = new Set(['ToolSearch', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])

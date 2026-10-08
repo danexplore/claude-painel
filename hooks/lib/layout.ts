@@ -185,17 +185,41 @@ export function statusSegments(data: StatusData): Segment[] {
 
 export type ActivityItem = { activity: Activity; icon: Piece; label: string; suffix?: Piece }
 
+export type ActivityGroup = { activity: Activity; count: number }
+
+/** Junta execuções seguidas do mesmo comando com o mesmo resultado; recebe do mais novo ao mais antigo. */
+export function groupRepeats(newestFirst: Activity[]): ActivityGroup[] {
+  const groups: ActivityGroup[] = []
+  for (const entry of newestFirst) {
+    const last = groups[groups.length - 1]
+    const isRepeat =
+      last !== undefined &&
+      entry.status !== 'running' &&
+      last.activity.status === entry.status &&
+      last.activity.kind === entry.kind &&
+      last.activity.label === entry.label
+    if (isRepeat) groups[groups.length - 1] = { ...last, count: last.count + 1 }
+    else groups.push({ activity: entry, count: 1 })
+  }
+  return groups
+}
+
+export function repeatSuffix(count: number): string {
+  return count > 1 ? ` ×${count}` : ''
+}
+
 const ITEM_GAP = 3
 const MIN_LABEL = 12
 
-function toItem(activity: Activity, now: number): ActivityItem {
+function toItem({ activity, count }: ActivityGroup, now: number): ActivityItem {
   const isRunning = activity.status === 'running'
   const icon: Piece = isRunning
     ? { text: '▶', tone: 'warn' }
     : activity.status === 'error'
       ? { text: '✗', tone: 'high' }
       : { text: KIND_ICON[activity.kind], tone: KIND_TONE[activity.kind], bold: activity.kind === 'critical' }
-  const suffix: Piece | undefined = isRunning ? { text: ` ${duration(now - activity.startedAt)}`, tone: 'dim' } : undefined
+  const suffixText = isRunning ? ` ${duration(now - activity.startedAt)}` : repeatSuffix(count)
+  const suffix: Piece | undefined = suffixText ? { text: suffixText, tone: 'dim' } : undefined
   return { activity, icon, label: activity.label, suffix }
 }
 
@@ -214,8 +238,9 @@ export function activityItems(
   const pinned = newestFirst.filter(entry => entry.status !== 'running' && unseenCritical.includes(entry.id))
   const recent = newestFirst.filter(entry => entry.status !== 'running' && !unseenCritical.includes(entry.id))
 
-  const required = [...running.slice(0, 1), ...pinned.slice(0, 3)].map(entry => toItem(entry, now))
-  const optional = recent.map(entry => toItem(entry, now))
+  const single = (entry: Activity): ActivityGroup => ({ activity: entry, count: 1 })
+  const required = [...running.slice(0, 1), ...pinned.slice(0, 3)].map(entry => toItem(single(entry), now))
+  const optional = groupRepeats(recent).map(group => toItem(group, now))
 
   const total = (items: ActivityItem[]) =>
     items.reduce((sum, item) => sum + itemWidth(item), Math.max(0, items.length - 1) * ITEM_GAP)

@@ -1,8 +1,8 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { classifyShell, classifyToolCall, isBookkeeping, stripRtk } from '../hooks/lib/classify'
+import { classifyShell, classifyToolCall, isBookkeeping, shortenPaths, stripRtk } from '../hooks/lib/classify'
 import { bar, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
-import { activityItems, fitSegments, statusSegments, type Segment } from '../hooks/lib/layout'
+import { activityItems, fitSegments, groupRepeats, statusSegments, type Segment } from '../hooks/lib/layout'
 import { parseGitStatus, parsePrView } from '../hooks/lib/parse'
 import type { Activity } from '../types'
 
@@ -58,6 +58,14 @@ describe('classificação de comandos', () => {
 
   test('rótulo some com o cd inicial', async () => {
     expect(classifyToolCall('Bash', { command: 'cd ~/x && rtk git status' }).label).toBe('git status')
+  })
+
+  test('caminho longo vira as duas últimas partes', async () => {
+    expect(shortenPaths('ls ~/.claude/mods/painel/hooks/lib')).toBe('ls …/hooks/lib')
+  })
+
+  test('caminho curto fica como está', async () => {
+    expect(shortenPaths('cat ./src/a.ts')).toBe('cat ./src/a.ts')
   })
 
   test('ToolSearch e plan-progress são bastidor', async () => {
@@ -196,6 +204,11 @@ describe('layout da faixa', () => {
     expect(items.map(item => item.label.endsWith('…') && item.label.length <= 38)).toEqual([true])
   })
 
+  test('repetidos seguidos viram um grupo com contagem', async () => {
+    const list = [entry('a', 'mcp', 'ok'), { ...entry('b', 'mcp', 'ok'), label: 'cmd-a' }, entry('c', 'cli', 'ok')]
+    expect(groupRepeats(list).map(group => group.count)).toEqual([2, 1])
+  })
+
   test('em andamento vem primeiro', async () => {
     const list = [entry('a', 'plain', 'ok'), entry('b', 'cli', 'running')]
     expect(activityItems(list, [], 200, 0).map(item => item.activity.id)).toEqual(['b', 'a'])
@@ -220,5 +233,22 @@ test('comando crítico aparece fixado na faixa e no contador', async ($, on) => 
   const counter = await ui.find({ key: 'seg-critical' })
   const pinned = await ui.find({ type: 'Button', text: /git push --force/ })
   expect([counter?.text, pinned !== undefined]).toEqual(['⚠ 1', true])
+  await ui.unmount()
+})
+
+test('lista lateral mostra repetidos agrupados', async ($, on) => {
+  mock.clock(on)
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
+  await $.tool.call({ tool: 'Bash', command: 'gh --version' })
+  await $.tool.call({ tool: 'Bash', command: 'gh --version' })
+  const ui = await $.ui.mount({
+    plugin: 'painel',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'painel',
+    props: { bodyColumns: 42, title: 'Atividade' },
+  } as never)
+  expect((await ui.find({ text: /×2/ })) !== undefined).toBe(true)
   await ui.unmount()
 })

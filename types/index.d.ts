@@ -50,6 +50,8 @@ export type PaneTab = 'activity' | 'tasks'
 
 export type ActivityFilter = 'all' | 'critical' | 'mcp' | 'cli'
 
+export type PaneMode = 'compact' | 'full'
+
 declare module 'claude-code' {
   interface PluginState {
     painel: {
@@ -66,6 +68,9 @@ declare module 'claude-code' {
       filter: ActivityFilter
       expanded: string | null
       showFullOutput: boolean
+      paneMode: PaneMode
+      sideListShown: boolean
+      sideListDismissed: boolean
     }
   }
 }
