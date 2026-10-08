@@ -27,6 +27,8 @@ export type Segment = {
 }
 
 export const KEEP = 100
+const MAX_REPO = 18
+const MAX_BRANCH = 26
 const SEGMENT_GAP = 2
 
 export const CATEGORY_ICON: Record<ActivityCategory, string> = { edit: '✎', action: '▶', read: '·' }
@@ -127,7 +129,7 @@ function usageSegments(usage: UsageInfo | null, now: number): Segment[] {
 
 function gitSegment(git: GitInfo | null): Segment[] {
   if (!git) return []
-  const pieces: Piece[] = [{ text: `⎇ ${git.repo}·${git.branch}` }]
+  const pieces: Piece[] = [{ text: `⎇ ${truncate(git.repo, MAX_REPO)}·${truncate(git.branch, MAX_BRANCH)}` }]
   if (git.changed > 0) pieces.push({ text: ` ●${git.changed}`, tone: 'dim' })
   if (git.ahead > 0) pieces.push({ text: ` ↑${git.ahead}`, tone: 'dim' })
   if (git.behind > 0) pieces.push({ text: ` ↓${git.behind}`, tone: 'warn' })

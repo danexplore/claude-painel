@@ -196,6 +196,34 @@ export function gitNote(operation: GitOperation | undefined): string | undefined
   return parts.length > 0 ? parts.join(' · ') : undefined
 }
 
+type BashResult = { bashEditDiff?: { files: { filePath: string; hunks: PatchHunk[] }[] } }
+type FileToolResult = { structuredPatch?: PatchHunk[]; type?: string; filePath?: string; content?: string }
+
+/**
+ * Os arquivos que uma chamada mudou, a partir do que a ferramenta devolveu: o patch do Edit/Write,
+ * o conteúdo de um Write que criou o arquivo, ou o diff que o Claude Code anota num Bash.
+ */
+export function changesFromResult(tool: string, input: Record<string, unknown>, result: unknown): FileChange[] {
+  const fromResult = changesInResult(tool, input, result)
+  if (fromResult.length > 0) return fromResult
+  const fromInput = classifyToolCall(tool, input).file
+  return fromInput ? [fromInput] : []
+}
+
+function changesInResult(tool: string, input: Record<string, unknown>, result: unknown): FileChange[] {
+  if (typeof result !== 'object' || result === null) return []
+  if (tool === 'Bash') {
+    return ((result as BashResult).bashEditDiff?.files ?? []).map(file => ({ path: file.filePath, diff: patchDiff(file.hunks) }))
+  }
+  if (!EDIT_TOOLS.has(tool)) return []
+  const record = result as FileToolResult
+  const path = record.filePath ?? stringField(input, 'file_path') ?? stringField(input, 'notebook_path')
+  if (!path) return []
+  if (record.structuredPatch && record.structuredPatch.length > 0) return [{ path, diff: patchDiff(record.structuredPatch) }]
+  const content = record.content ?? stringField(input, 'content')
+  return content !== undefined ? [{ path, content: content.slice(0, MAX_FILE_CHARS) }] : []
+}
+
 /** O tipo antes de rodar; um Bash que o Claude Code marcar como somente leitura vira leitura depois. */
 export function settleCategory(category: ActivityCategory, isReadOnly: boolean): ActivityCategory {
   return category === 'action' && isReadOnly ? 'read' : category

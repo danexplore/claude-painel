@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Activity, ActivityFilter, GitInfo, PaneMode, PaneTab, PrInfo, RequestGroup, Task, TaskStatus, UsageInfo } from '../types'
-import { classifyToolCall, gitNote, isBookkeeping, patchDiff, patchStat, settleCategory, type GitOperation, type PatchHunk } from './lib/classify'
+import type { Activity, ActivityFilter, FileEvent, GitInfo, PaneMode, PaneTab, PrInfo, RequestGroup, Task, TaskStatus, UsageInfo } from '../types'
+import { changesFromResult, classifyToolCall, gitNote, isBookkeeping, settleCategory, type GitOperation } from './lib/classify'
 import { clockTime, duration, truncate } from './lib/format'
 import {
   activityItems,
@@ -23,8 +23,8 @@ import {
   type Tone,
 } from './lib/layout'
 import { parseGitStatus, parsePrView } from './lib/parse'
-import { filesChanged, homePath } from './lib/files'
-import { entryDetail } from './views/detail'
+import { changesStat, filesChanged, homePath, mergeFileEvents } from './lib/files'
+import { entryDetail, fileDiff } from './views/detail'
 
 const PANE = 'painel'
 const MAX_ACTIVITY = 200
@@ -58,6 +58,7 @@ const paneMode = atom({ plugin: 'painel', key: 'paneMode' } as const, 'compact' 
 const sideListShown = atom({ plugin: 'painel', key: 'sideListShown' } as const, false)
 const sideListDismissed = atom({ plugin: 'painel', key: 'sideListDismissed' } as const, false)
 const toolsInChat = atom({ plugin: 'painel', key: 'toolsInChat' } as const, false)
+const fileLog = atom({ plugin: 'painel', key: 'fileLog' } as const, [] as FileEvent[])
 const requests = atom({ plugin: 'painel', key: 'requests' } as const, [] as RequestGroup[])
 const showReads = atom({ plugin: 'painel', key: 'showReads' } as const, false)
 const toggledGroups = atom({ plugin: 'painel', key: 'toggledGroups' } as const, [] as string[])
@@ -183,6 +184,22 @@ let homeDir: string | undefined
 let lastBranch: string | undefined
 let ticker: { cancel: () => void } | undefined
 
+/** Refaz o registro de arquivos a partir do histórico da sessão: cobre o que veio antes desta carga do mod. */
+async function backfillFileLog($: Engine): Promise<void> {
+  const messages = await $.session.messages().catch(() => [])
+  const startedAtById = new Map((await read($, activity)).map(entry => [entry.id, entry.startedAt]))
+  const events = messages
+    .flatMap(message => message.toolUses ?? [])
+    .filter(use => !use.isError)
+    .flatMap(use =>
+      changesFromResult(use.tool, use.input, use.result).map(change => {
+        const at = startedAtById.get(use.tool_use_id)
+        return { ...change, id: use.tool_use_id, ...(at !== undefined ? { at } : {}) }
+      }),
+    )
+  await update($, fileLog, log => mergeFileEvents(events, log))
+}
+
 async function syncGit($: Engine): Promise<void> {
   const info = await refreshGit($)
   if (info && info.branch !== lastBranch) {
@@ -211,6 +228,7 @@ export const register: Register = on => {
     const result = await next(e)
     await $.command.register({ name: 'painel', description: 'Abre o painel de atividade e tarefas' })
     homeDir = await $.env.get('HOME').catch(() => undefined)
+    await backfillFileLog($).catch(() => undefined)
     const figures = await $.session.usage()
     await update($, startedAt, () => figures.startedAt)
     await update($, now, () => Date.now())
@@ -278,26 +296,17 @@ export const register: Register = on => {
     const ran = await next(e)
 
     if (isTracked) {
-      const patch = (ran.result as { structuredPatch?: PatchHunk[] } | undefined)?.structuredPatch
-      const fromPatch =
-        classified.file && patch && patch.length > 0
-          ? { file: { path: classified.file.path, diff: patchDiff(patch) }, stat: patchStat(patch) }
-          : {}
-      const bash = ran.result as
-        | { bashEditDiff?: { files: { filePath: string; hunks: PatchHunk[] }[] }; gitOperation?: GitOperation }
-        | undefined
-      const bashFiles = bash?.bashEditDiff?.files ?? []
-      const fromBash = {
-        ...(bashFiles.length > 0
-          ? {
-              files: bashFiles.map(file => ({ path: file.filePath, diff: patchDiff(file.hunks) })),
-              stat: patchStat(bashFiles.flatMap(file => file.hunks)),
-              category: 'edit' as const,
-            }
-          : {}),
-        ...(gitNote(bash?.gitOperation) ? { gitNote: gitNote(bash?.gitOperation) } : {}),
-      }
       const isError = ran.deny !== undefined || ran.isError === true
+      const changes = isError ? [] : changesFromResult(String(e.tool), input, ran.result)
+      const note = gitNote((ran.result as { gitOperation?: GitOperation } | undefined)?.gitOperation)
+      const fromResult = {
+        ...(changes.length > 0 ? { file: undefined, files: changes, stat: changesStat(changes) } : {}),
+        ...(changes.length > 0 && e.tool === 'Bash' ? { category: 'edit' as const } : {}),
+        ...(note ? { gitNote: note } : {}),
+      }
+      if (changes.length > 0) {
+        await update($, fileLog, log => mergeFileEvents(log, changes.map(change => ({ ...change, id, at: started }))))
+      }
       const output = (ran.deny ?? ran.text ?? '').slice(0, MAX_OUTPUT_CHARS)
       await update($, activity, list =>
         list.map(entry =>
@@ -308,8 +317,7 @@ export const register: Register = on => {
                 ms: Date.now() - started,
                 output,
                 category: settleCategory(classified.category, ran.isReadOnly === true),
-                ...fromPatch,
-                ...fromBash,
+                ...fromResult,
               }
             : entry,
         ),
@@ -460,7 +468,7 @@ export const register: Register = on => {
     const currentTime = (await read($, now)) || Date.now()
     const rule = <Text dimColor>{'─'.repeat(width)}</Text>
     const isCompact = (await read($, paneMode)) === 'compact'
-    const changedFiles = filesChanged(list)
+    const changedFiles = filesChanged(await read($, fileLog))
 
     const toggleExpanded = (id: string) =>
       void (async () => {
@@ -670,14 +678,13 @@ export const register: Register = on => {
                 </Box>
                 {isOpen && (
                   <Box flexDirection="column" paddingLeft={2}>
-                    {file.changes.map(change => (
-                      <Box key={`file-change-${change.id}`} flexDirection="column">
-                        <Text dimColor>── {clockTime(change.startedAt)} ──</Text>
-                        {entryDetail(kit, change, {
+                    {file.changes.map((change, index) => (
+                      <Box key={`file-change-${change.id}-${index}`} flexDirection="column">
+                        <Text dimColor>── {change.at ? clockTime(change.at) : 'antes'} ──</Text>
+                        {fileDiff(kit, `${change.id}-${index}`, change, {
                           width: width - 4,
                           previewLines: OUTPUT_PREVIEW_LINES,
                           isFull: isFullOutput,
-                          onlyPath: file.path,
                           home: homeDir,
                           onShowAll: () => void update($, showFullOutput, () => true),
                         })}

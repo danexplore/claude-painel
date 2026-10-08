@@ -27,6 +27,9 @@ export type Activity = {
 
 export type FileChange = { path: string; content?: string; diff?: string }
 
+/** Uma troca num arquivo, no registro próprio da aba Arquivos (sem o limite da lista de atividade). */
+export type FileEvent = FileChange & { id: string; at?: number }
+
 export type TaskStatus = 'pending' | 'in_progress' | 'completed'
 
 export type Task = { id: string; subject: string; status: TaskStatus }
@@ -86,6 +89,7 @@ declare module 'claude-code' {
       sideListShown: boolean
       sideListDismissed: boolean
       toolsInChat: boolean
+      fileLog: FileEvent[]
       requests: RequestGroup[]
       showReads: boolean
       toggledGroups: string[]

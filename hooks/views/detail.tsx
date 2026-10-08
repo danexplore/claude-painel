@@ -130,7 +130,7 @@ function mcpOutput(kit: Kit, entry: Activity, options: DetailOptions): RenderNod
   )
 }
 
-function fileDiff(kit: Kit, id: string, file: FileChange, options: DetailOptions): RenderNode {
+export function fileDiff(kit: Kit, id: string, file: FileChange, options: DetailOptions): RenderNode {
   const { Box, Text, Code, Markdown } = kit
   const isMarkdown = /\.(?:md|mdx|markdown)$/i.test(file.path)
   const { text, total } = file.diff !== undefined ? limitHunks(file.diff, options) : limitLines(file.content ?? '', options)

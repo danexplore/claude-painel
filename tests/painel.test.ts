@@ -4,7 +4,7 @@ import { classifyShell, classifyToolCall, gitNote, isBookkeeping, patchDiff, pat
 import { bar, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
 import { activityItems, fitSegments, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
-import { filesChanged, homePath } from '../hooks/lib/files'
+import { filesChanged, homePath, mergeFileEvents } from '../hooks/lib/files'
 import { parseGitStatus, parsePrView } from '../hooks/lib/parse'
 import type { Activity } from '../types'
 
@@ -227,6 +227,12 @@ describe('layout da faixa', () => {
     expect(ids(fitSegments(all, full - 1))).toEqual(['context', 'git', 'pr', 'tasks', 'critical'])
   })
 
+  test('branch longa é cortada para a faixa não quebrar', async () => {
+    const long = { ...data, git: { ...data.git, repo: 'melhore-o-subrail-da-tela', branch: 'feat/project-first-navigation-v2' } }
+    const git = statusSegments(long).find(segment => segment.id === 'git')!
+    expect(git.pieces[0]!.text.length).toBeLessThanOrEqual(2 + 18 + 1 + 26)
+  })
+
   test('muito estreito, mantém contexto, git e críticos', async () => {
     expect(ids(fitSegments(statusSegments(data), 10))).toEqual(['context', 'git', 'critical'])
   })
@@ -399,32 +405,25 @@ test('lista mostra o markdown escrito ao expandir um Write', async ($, on) => {
 })
 
 describe('arquivos da sessão', () => {
-  const change = (id: string, path: string, file: Activity['file']): Activity => ({
-    id,
-    startedAt: Number(id.slice(1)),
-    kind: 'plain',
-    category: 'edit',
-    groupId: 'r',
-    label: path,
-    detail: path,
-    status: 'ok',
-    file,
-  })
-
   test('soma as trocas de cada arquivo', async () => {
     const files = filesChanged([
-      change('e1', '/a.ts', { path: '/a.ts', diff: '@@ -1,1 +1,2 @@\n-x\n+y\n+z' }),
-      change('e2', '/a.ts', { path: '/a.ts', diff: '@@ -1,1 +1,1 @@\n-y\n+w' }),
+      { id: 'e1', path: '/a.ts', diff: '@@ -1,1 +1,2 @@\n-x\n+y\n+z' },
+      { id: 'e2', path: '/a.ts', diff: '@@ -1,1 +1,1 @@\n-y\n+w' },
     ])
     expect(files.map(file => [file.path, file.added, file.removed, file.changes.length])).toEqual([['/a.ts', 3, 2, 2]])
   })
 
   test('o arquivo editado por último vem primeiro', async () => {
     const files = filesChanged([
-      change('e1', '/a.ts', { path: '/a.ts', content: 'x' }),
-      change('e2', '/b.md', { path: '/b.md', content: 'y' }),
+      { id: 'e1', path: '/a.ts', content: 'x' },
+      { id: 'e2', path: '/b.md', content: 'y' },
     ])
     expect(files.map(file => file.path)).toEqual(['/b.md', '/a.ts'])
+  })
+
+  test('a mesma troca vinda do histórico e ao vivo não se repete', async () => {
+    const event = { id: 'e1', path: '/a.ts', diff: '@@ -1,1 +1,1 @@\n-a\n+b' }
+    expect(mergeFileEvents([event], [event, { ...event, id: 'e2' }]).map(one => one.id)).toEqual(['e1', 'e2'])
   })
 
   test('caminho na home vira ~', async () => {
