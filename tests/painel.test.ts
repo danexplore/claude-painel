@@ -4,6 +4,7 @@ import { classifyShell, classifyToolCall, isBookkeeping, settleCategory, shorten
 import { bar, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
 import { activityItems, fitSegments, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
+import { filesChanged, homePath } from '../hooks/lib/files'
 import { parseGitStatus, parsePrView } from '../hooks/lib/parse'
 import type { Activity } from '../types'
 
@@ -383,5 +384,51 @@ test('lista mostra o markdown escrito ao expandir um Write', async ($, on) => {
   const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
   await ui.press({ key: 'open-w1' })
   expect((await ui.find({ type: 'Markdown' })) !== undefined).toBe(true)
+  await ui.unmount()
+})
+
+describe('arquivos da sessão', () => {
+  const change = (id: string, path: string, file: Activity['file']): Activity => ({
+    id,
+    startedAt: Number(id.slice(1)),
+    kind: 'plain',
+    category: 'edit',
+    groupId: 'r',
+    label: path,
+    detail: path,
+    status: 'ok',
+    file,
+  })
+
+  test('soma as trocas de cada arquivo', async () => {
+    const files = filesChanged([
+      change('e1', '/a.ts', { path: '/a.ts', diff: '@@ -1,1 +1,2 @@\n-x\n+y\n+z' }),
+      change('e2', '/a.ts', { path: '/a.ts', diff: '@@ -1,1 +1,1 @@\n-y\n+w' }),
+    ])
+    expect(files.map(file => [file.path, file.added, file.removed, file.changes.length])).toEqual([['/a.ts', 3, 2, 2]])
+  })
+
+  test('o arquivo editado por último vem primeiro', async () => {
+    const files = filesChanged([
+      change('e1', '/a.ts', { path: '/a.ts', content: 'x' }),
+      change('e2', '/b.md', { path: '/b.md', content: 'y' }),
+    ])
+    expect(files.map(file => file.path)).toEqual(['/b.md', '/a.ts'])
+  })
+
+  test('caminho na home vira ~', async () => {
+    expect(homePath('/home/eu/x/a.ts', '/home/eu')).toBe('~/x/a.ts')
+  })
+})
+
+test('aba Arquivos lista o arquivo editado e mostra o diff ao abrir', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('tool.call', () => ({ result: {}, text: 'ok' }))
+  await $.tool.call({ tool: 'Edit', tool_use_id: 'e1', file_path: '/x/app.ts', old_string: 'a', new_string: 'b' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'files' })
+  await ui.press({ key: 'file-open-/x/app.ts' })
+  expect((await ui.find({ type: 'Code' })) !== undefined).toBe(true)
   await ui.unmount()
 })

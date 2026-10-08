@@ -23,6 +23,7 @@ import {
   type Tone,
 } from './lib/layout'
 import { parseGitStatus, parsePrView } from './lib/parse'
+import { filesChanged, homePath } from './lib/files'
 import { entryDetail } from './views/detail'
 
 const PANE = 'painel'
@@ -178,6 +179,7 @@ function recordTask(list: Task[], id: string, change: Partial<Task>): Task[] {
   return list.map(task => (task.id === id ? { ...task, ...change } : task))
 }
 
+let homeDir: string | undefined
 let lastBranch: string | undefined
 let ticker: { cancel: () => void } | undefined
 
@@ -208,6 +210,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await $.command.register({ name: 'painel', description: 'Abre o painel de atividade e tarefas' })
+    homeDir = await $.env.get('HOME').catch(() => undefined)
     const figures = await $.session.usage()
     await update($, startedAt, () => figures.startedAt)
     await update($, now, () => Date.now())
@@ -436,6 +439,7 @@ export const register: Register = on => {
     const currentTime = (await read($, now)) || Date.now()
     const rule = <Text dimColor>{'─'.repeat(width)}</Text>
     const isCompact = (await read($, paneMode)) === 'compact'
+    const changedFiles = filesChanged(list)
 
     const toggleExpanded = (id: string) =>
       void (async () => {
@@ -524,6 +528,16 @@ export const register: Register = on => {
                 label={isToolsInChat ? 'tirar do chat' : 'ver no chat'}
                 onPress={() => void update($, toolsInChat, shown => !shown)}
               />
+              {changedFiles.length > 0 && (
+                <Button
+                  key="files"
+                  plain
+                  hotkey="f"
+                  dimColor
+                  label={`arquivos ${changedFiles.length}`}
+                  onPress={() => void openPane($, { tab: 'files' })}
+                />
+              )}
               <Button key="expand" plain hotkey="a" label="abrir" onPress={() => void openPane($, { tab: 'activity' })} />
             </Box>
           </Box>
@@ -593,8 +607,65 @@ export const register: Register = on => {
         <Button key="compact" plain hotkey="c" dimColor label="◂ compactar" onPress={() => void openSideList($)} />
         <Button key="tab-activity" plain hotkey="1" dimColor={currentTab !== 'activity' ? true : undefined} label={`Atividade ${list.length}`} onPress={() => void update($, tab, () => 'activity')} />
         <Button key="tab-tasks" plain hotkey="2" dimColor={currentTab !== 'tasks' ? true : undefined} label={`Tarefas ${taskList.length}`} onPress={() => void update($, tab, () => 'tasks')} />
+        <Button key="tab-files" plain hotkey="3" dimColor={currentTab !== 'files' ? true : undefined} label={`Arquivos ${changedFiles.length}`} onPress={() => void update($, tab, () => 'files')} />
       </Box>
     )
+
+    if (currentTab === 'files') {
+      const added = changedFiles.reduce((sum, file) => sum + file.added, 0)
+      const removed = changedFiles.reduce((sum, file) => sum + file.removed, 0)
+      return (
+        <Box flexDirection="column">
+          {tabs}
+          {changedFiles.length > 0 && (
+            <Text dimColor>
+              {changedFiles.length} {changedFiles.length === 1 ? 'arquivo' : 'arquivos'} nesta sessão · +{added} −{removed}
+            </Text>
+          )}
+          {rule}
+          {changedFiles.length === 0 && <Text dimColor>Nenhum arquivo editado nesta sessão.</Text>}
+          {changedFiles.map(file => {
+            const key = `file:${file.path}`
+            const isOpen = expandedId === key
+            const stat = `${file.isWritten && file.removed === 0 ? 'novo · ' : ''}+${file.added} −${file.removed}`
+            const shown = homePath(file.path, homeDir)
+            return (
+              <Box key={`file-${file.path}`} flexDirection="column" marginBottom={isOpen ? 1 : 0}>
+                <Box justifyContent="space-between">
+                  <Box>
+                    <Text color="warning">{isOpen ? '▾' : '✎'} </Text>
+                    <Button
+                      key={`file-open-${file.path}`}
+                      plain
+                      label={truncate(shown, Math.max(10, width - stat.length - 12))}
+                      onPress={() => toggleExpanded(key)}
+                    />
+                  </Box>
+                  <Text dimColor>
+                    {stat}  {file.changes.length}×
+                  </Text>
+                </Box>
+                {isOpen && (
+                  <Box flexDirection="column" paddingLeft={2}>
+                    {file.changes.map(change => (
+                      <Box key={`file-change-${change.id}`} flexDirection="column">
+                        <Text dimColor>── {clockTime(change.startedAt)} ──</Text>
+                        {entryDetail(kit, change, {
+                          width: width - 4,
+                          previewLines: OUTPUT_PREVIEW_LINES,
+                          isFull: isFullOutput,
+                          onShowAll: () => void update($, showFullOutput, () => true),
+                        })}
+                      </Box>
+                    ))}
+                  </Box>
+                )}
+              </Box>
+            )
+          })}
+        </Box>
+      )
+    }
 
     if (currentTab === 'tasks') {
       const glyph = { pending: '○', in_progress: '◐', completed: '●' } as const

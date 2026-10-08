@@ -58,7 +58,7 @@ export type UsageInfo = {
   limits: LimitReading[]
 }
 
-export type PaneTab = 'activity' | 'tasks'
+export type PaneTab = 'activity' | 'tasks' | 'files'
 
 export type ActivityFilter = 'all' | 'edit' | 'action' | 'read' | 'critical'
 
