@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Activity, ActivityFilter, FileEvent, GitInfo, ChatTools, PaneTab, PrInfo, RequestGroup, Task, TaskStatus, UsageInfo } from '../types'
+import type { Activity, ActivityFilter, FileEvent, GitInfo, ChatTools, PaneTab, PrInfo, RequestGroup, SubAgent, Task, TaskStatus, UsageInfo } from '../types'
 import { changesFromResult, classifyToolCall, gitNote, isBookkeeping, settleCategory, type GitOperation } from './lib/classify'
 import { cleanText, clockTime, duration, truncate } from './lib/format'
 import {
@@ -16,7 +16,10 @@ import {
   readsLabel,
   sinceLabel,
   fitSegments,
+  arrangeWithAgents,
   groupRepeats,
+  runningAgents,
+  type AgentRow,
   repeatSuffix,
   matchesFilter,
   statusSegments,
@@ -56,6 +59,7 @@ const expanded = atom({ plugin: 'painel', key: 'expanded' } as const, null as st
 const showFullOutput = atom({ plugin: 'painel', key: 'showFullOutput' } as const, false)
 const sideListShown = atom({ plugin: 'painel', key: 'sideListShown' } as const, false)
 const sideListDismissed = atom({ plugin: 'painel', key: 'sideListDismissed' } as const, false)
+const agents = atom({ plugin: 'painel', key: 'agents' } as const, [] as SubAgent[])
 const chatTools = atom({ plugin: 'painel', key: 'chatTools' } as const, 'none' as ChatTools)
 const CHAT_TOOLS_NEXT: Record<ChatTools, ChatTools> = { none: 'edits', edits: 'all', all: 'none' }
 const CHAT_TOOLS_LABEL: Record<ChatTools, string> = { none: 'chat: nada', edits: 'chat: edições', all: 'chat: tudo' }
@@ -239,7 +243,8 @@ function ensureTicker($: Engine): void {
     void (async () => {
       await update($, now, () => Date.now())
       const list = await read($, activity)
-      if (!list.some(entry => entry.status === 'running')) {
+      const isAgentRunning = (await read($, agents)).some(agent => agent.status === 'running')
+      if (!isAgentRunning && !list.some(entry => entry.status === 'running')) {
         ticker?.cancel()
         ticker = undefined
       }
@@ -295,10 +300,32 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
+    const loop = (e as { agentId?: string }).agentId
+    if (loop) {
+      await update($, agents, list => list.map(agent => (agent.id === loop ? { ...agent, status: 'done' as const, endedAt: Date.now() } : agent)))
+      return next(e)
+    }
     await ensureSideList($)
     await update($, turns, count => count + 1)
     await update($, now, () => Date.now())
     return next(e)
+  })
+
+  on('agent.spawn', async ($, e, next) => {
+    const spawned = await next(e)
+    if (spawned.agentId) {
+      const agent: SubAgent = {
+        id: spawned.agentId,
+        toolUseId: e.tool_use_id,
+        description: e.description || e.prompt.split('\n')[0]!.slice(0, 80),
+        type: e.subagentType,
+        startedAt: Date.now(),
+        status: 'running',
+      }
+      await update($, agents, list => [...list.filter(one => one.id !== agent.id), agent].slice(-MAX_ACTIVITY))
+      ensureTicker($)
+    }
+    return spawned
   })
 
   on('tool.call', async ($, e, next) => {
@@ -311,7 +338,10 @@ export const register: Register = on => {
     if (isTracked) {
       const groupId = (await read($, requests)).at(-1)?.id ?? 'inicio'
       await update($, activity, list =>
-        [...list, { id, startedAt: started, status: 'running' as const, groupId, tool: String(e.tool), ...classified }].slice(-MAX_ACTIVITY),
+        [
+          ...list,
+          { id, startedAt: started, status: 'running' as const, groupId, tool: String(e.tool), ...classified, ...(e.agentId ? { agentId: e.agentId } : {}) },
+        ].slice(-MAX_ACTIVITY),
       )
       await update($, now, () => started)
       ensureTicker($)
@@ -352,17 +382,19 @@ export const register: Register = on => {
       }
     }
 
+    // A lista de tarefas é a do loop principal: a de um subagente não substitui a sua.
     const created = (ran.result as { task?: { id: string; subject: string } } | undefined)?.task
-    if (e.tool === 'TaskCreate' && created) {
+    const isMainLoop = !e.agentId
+    if (isMainLoop && e.tool === 'TaskCreate' && created) {
       await update($, tasks, list => recordTask(list, created.id, { subject: created.subject, status: 'pending' }))
-    } else if (e.tool === 'TaskUpdate' && e.status) {
+    } else if (isMainLoop && e.tool === 'TaskUpdate' && e.status) {
       const status = e.status
       await update($, tasks, list =>
         status === 'deleted'
           ? list.filter(task => task.id !== e.taskId)
           : recordTask(list, e.taskId, { status, ...(e.subject ? { subject: e.subject } : {}) }),
       )
-    } else if (e.tool === 'TodoWrite') {
+    } else if (isMainLoop && e.tool === 'TodoWrite') {
       await update($, tasks, () =>
         e.todos.map((todo, index) => ({ id: `todo-${index}`, subject: todo.content, status: todo.status as TaskStatus })),
       )
@@ -387,7 +419,12 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
-    if (e.props.isExpanded || (await showsInChat($, e.props.calls.map(call => call.tool)))) return next(e)
+    if (e.props.isExpanded || (await read($, chatTools)) === 'all') return next(e)
+    // Em modo edições, um grupo com alguma edição abre em linhas: cada chamada passa pelo filtro do
+    // ToolUse sozinha, e só as edições aparecem. Grupo sem edição some inteiro.
+    if ((await read($, chatTools)) === 'edits' && e.props.calls.some(call => EDIT_TOOLS.has(call.tool))) {
+      return next({ ...e, props: { ...e.props, isExpanded: true } })
+    }
     const { Box } = $.ui.resolve(e)
     return <Box />
   })
@@ -470,6 +507,7 @@ export const register: Register = on => {
     )
 
     const work = currentWork(await read($, activity), await read($, requests))
+    const agentsRunning = runningAgents(await read($, agents))
     const workLine = work && (
       <Box paddingLeft={1}>
         <Text color={work.running ? 'warning' : undefined} dimColor={work.running ? undefined : true}>
@@ -480,7 +518,7 @@ export const register: Register = on => {
           plain
           dimColor
           label={truncate(
-            `${workLabel(work)}${work.running ? ` · ${cleanText(work.running.label)} ${duration(currentTime - work.running.startedAt)}` : ''}`,
+            `${workLabel(work)}${agentsRunning ? ` · ◇ ${agentsRunning} ${agentsRunning === 1 ? 'agente' : 'agentes'}` : ''}${work.running ? ` · ${cleanText(work.running.label)} ${duration(currentTime - work.running.startedAt)}` : ''}`,
             Math.max(10, width - 3),
           )}
           onPress={() => void openPane($, { tab: 'activity', ...(work.running ? { expand: work.running.id } : {}) })}
@@ -712,6 +750,42 @@ export const register: Register = on => {
     const toggled = await read($, toggledGroups)
     const readsOpen = await read($, readsOpenIn)
     const views = groupByRequest(list, await read($, requests))
+    const agentList = await read($, agents)
+
+    const agentBlock = (row: AgentRow, areReadsOpen: boolean, room: number) => {
+      const { agent, call, children, counts: agentCounts } = row
+      const key = `agent-${agent.id}`
+      const isOpen = (agent.status === 'running') !== toggled.includes(key)
+      const shown = children.filter(entry => areReadsOpen || categoryOf(entry) !== 'read')
+      const elapsed = (agent.endedAt ?? currentTime) - agent.startedAt
+      const status = agent.status === 'running' ? `◌ ${duration(elapsed)}` : `✓ ${duration(elapsed)}`
+      const summary = [countsLabel(agentCounts), agentCounts.read ? readsLabel(agentCounts.read) : ''].filter(Boolean).join(' · ')
+      return (
+        <Box key={key} flexDirection="column">
+          <Box justifyContent="space-between">
+            <Box>
+              <Text color="suggestion">{isOpen ? '▾' : '◇'} </Text>
+              <Button
+                key={`${key}-toggle`}
+                plain
+                label={truncate(`${agent.type} · ${cleanText(agent.description)}`, Math.max(8, room - status.length - 3))}
+                onPress={() => void update($, toggledGroups, ids => (ids.includes(key) ? ids.filter(one => one !== key) : [...ids, key]))}
+              />
+            </Box>
+            <Text color={agent.status === 'running' ? 'warning' : undefined} dimColor={agent.status === 'running' ? undefined : true}>
+              {status}
+            </Text>
+          </Box>
+          {summary && <Text dimColor>{'  '}{truncate(summary, room - 2)}</Text>}
+          {isOpen && (
+            <Box flexDirection="column" paddingLeft={2}>
+              {groupRepeats(shown).map(({ activity: entry, count }) => entryRow(entry, count, room - 2))}
+              {call && call.status !== 'running' && entryRow({ ...call, label: 'resposta do agente', stat: undefined }, 1, room - 2)}
+            </Box>
+          )}
+        </Box>
+      )
+    }
     return (
       <Box flexDirection="column">
         {header}
@@ -755,7 +829,11 @@ export const register: Register = on => {
               </Box>
               {isOpen && (
                 <Box flexDirection="column" paddingLeft={2}>
-                  {groupRepeats(visible).map(({ activity: entry, count }) => entryRow(entry, count, width - 4))}
+                  {arrangeWithAgents(matching, agentList).map(row =>
+                    row.kind === 'agent'
+                      ? agentBlock(row.row, areReadsOpen, width - 4)
+                      : (areReadsOpen || categoryOf(row.group.activity) !== 'read') && entryRow(row.group.activity, row.group.count, width - 4),
+                  )}
                   {hiddenReads > 0 && (
                     <Button
                       key={`reads-${id}`}

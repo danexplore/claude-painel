@@ -1,4 +1,4 @@
-import type { Activity, ActivityCategory, ActivityFilter, GitInfo, PaneTab, PrInfo, RequestGroup, Task, UsageInfo } from '../../types'
+import type { Activity, ActivityCategory, ActivityFilter, GitInfo, PaneTab, PrInfo, RequestGroup, SubAgent, Task, UsageInfo } from '../../types'
 import {
   LIMIT_WINDOWS,
   bar,
@@ -358,4 +358,41 @@ export function currentWork(activity: Activity[], requests: RequestGroup[]): Wor
 export function workLabel(work: WorkSummary): string {
   const parts = [countsLabel(work.counts), work.counts.read ? readsLabel(work.counts.read) : ''].filter(Boolean)
   return parts.join(' · ')
+}
+
+export type AgentRow = { agent: SubAgent; call: Activity | undefined; children: Activity[]; counts: CategoryCounts }
+export type GroupRow = { kind: 'entry'; group: ActivityGroup } | { kind: 'agent'; row: AgentRow }
+
+/**
+ * As chamadas de um subagente ficam dentro dele, logo abaixo da chamada Agent que o criou,
+ * em vez de misturadas com as do Claude principal. Subagente sem a chamada à vista vai pro fim.
+ */
+export function arrangeWithAgents(entries: Activity[], agents: SubAgent[]): GroupRow[] {
+  const known = new Set(agents.map(agent => agent.id))
+  // Subagente que o painel não viu nascer (mod recarregado no meio): as chamadas dele ficam soltas.
+  const isNested = (entry: Activity) => entry.agentId !== undefined && known.has(entry.agentId)
+  const byAgent = new Map<string, Activity[]>()
+  for (const entry of entries) {
+    if (isNested(entry)) byAgent.set(entry.agentId!, [...(byAgent.get(entry.agentId!) ?? []), entry])
+  }
+  const agentOfCall = new Map(agents.map(agent => [agent.toolUseId, agent]))
+  const agentRow = (agent: SubAgent, call: Activity | undefined): AgentRow => {
+    const children = byAgent.get(agent.id) ?? []
+    return { agent, call, children, counts: countCategories(children) }
+  }
+  const placed = new Set<string>()
+  const rows: GroupRow[] = groupRepeats(entries.filter(entry => !isNested(entry))).map(group => {
+    const agent = agentOfCall.get(group.activity.id)
+    if (!agent) return { kind: 'entry', group }
+    placed.add(agent.id)
+    return { kind: 'agent', row: agentRow(agent, group.activity) }
+  })
+  for (const agent of agents) {
+    if (!placed.has(agent.id) && byAgent.has(agent.id)) rows.push({ kind: 'agent', row: agentRow(agent, undefined) })
+  }
+  return rows
+}
+
+export function runningAgents(agents: SubAgent[]): number {
+  return agents.filter(agent => agent.status === 'running').length
 }

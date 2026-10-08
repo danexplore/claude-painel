@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { classifyShell, classifyToolCall, gitNote, isBookkeeping, isReadOnlyShell, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
 import { bar, cleanText, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
-import { activityItems, categoryOf, currentWork, fitSegments, workLabel, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
+import { activityItems, arrangeWithAgents, categoryOf, currentWork, fitSegments, workLabel, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
 import { withMcpFields } from '../hooks/views/detail'
 import { filesChanged, groupByProject, homePath, mergeFileEvents, projectPath } from '../hooks/lib/files'
@@ -495,6 +495,64 @@ test('chat em modo edições mostra Edit e esconde Bash', async ($, on) => {
   expect([(await edit.find({ text: /nativo/ })) !== undefined, (await bash.find({ text: /nativo/ })) !== undefined]).toEqual([true, false])
   await edit.unmount()
   await bash.unmount()
+})
+
+describe('subagentes', () => {
+  const call = (id: string, extra: Partial<Activity> = {}): Activity => ({
+    id, startedAt: 0, kind: 'plain', category: 'action', groupId: 'g', label: id, detail: id, status: 'ok', ...extra,
+  })
+  const agent = { id: 'ag1', toolUseId: 'spawn1', description: 'Wave 2A', type: 'Explore', startedAt: 0, status: 'running' as const }
+
+  test('chamadas do subagente ficam dentro da chamada Agent que o criou', async () => {
+    const rows = arrangeWithAgents([call('a'), call('spawn1', { tool: 'Agent' }), call('x', { agentId: 'ag1' }), call('y', { agentId: 'ag1' })], [agent])
+    expect(rows.map(row => (row.kind === 'agent' ? `agent:${row.row.children.length}` : row.group.activity.id))).toEqual(['a', 'agent:2'])
+  })
+
+  test('chamada de subagente desconhecido continua visível', async () => {
+    const rows = arrangeWithAgents([call('x', { agentId: 'outro' })], [agent])
+    expect(rows.map(row => row.kind)).toEqual(['entry'])
+  })
+
+  test('subagente sem a chamada à vista vai para o fim do pedido', async () => {
+    const rows = arrangeWithAgents([call('a'), call('x', { agentId: 'ag1' })], [agent])
+    expect(rows.map(row => row.kind)).toEqual(['entry', 'agent'])
+  })
+})
+
+test('chamada feita por subagente aparece na lista', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('tool.call', () => ({ result: {}, text: 'ok' }))
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'b9', command: 'npm test', description: 'Roda os testes', agentId: 'ag9' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  expect((await ui.find({ text: /Roda os testes/ })) !== undefined).toBe(true)
+  await ui.unmount()
+})
+
+test('subagente aparece como bloco com as chamadas dele dentro', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('agent.spawn', () => ({ model: 'm', agentId: 'ag7' }) as never)
+  on('tool.call', () => ({ result: {}, text: 'ok' }))
+  await $.agent.spawn({ prompt: 'faz', description: 'Revisa o diff', subagentType: 'Explore' } as never)
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'b7', command: 'npm test', description: 'Roda os testes do agente', agentId: 'ag7' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  const found = [await ui.find({ text: /Explore · Revisa o diff/ }), await ui.find({ text: /Roda os testes do agente/ })]
+  expect(found.map(node => node !== undefined)).toEqual([true, true])
+  await ui.unmount()
+})
+
+test('modo edições abre o grupo misto em linhas e esconde o grupo sem edição', async ($, on) => {
+  on('ui.render', (_$, e: { props?: { isExpanded?: boolean } }) => ({ type: 'Text' as const, props: {}, children: [`expandido:${e.props?.isExpanded}`] }) as never)
+  const pane = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await pane.press({ key: 'chat-tools' })
+  await pane.unmount()
+  const call = (tool: string) => ({ tool, input: {}, isRunning: false, isErrored: false, isInterrupted: false })
+  const mixed = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'ToolGroup', props: { calls: [call('Read'), call('Edit')], isActive: false, isExpanded: false } } as never)
+  const reads = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'ToolGroup', props: { calls: [call('Read'), call('Bash')], isActive: false, isExpanded: false } } as never)
+  expect([(await mixed.find({ text: /expandido:true/ })) !== undefined, (await reads.find({ text: /expandido/ })) !== undefined]).toEqual([true, false])
+  await mixed.unmount()
+  await reads.unmount()
 })
 
 describe('trabalho do pedido atual', () => {

@@ -24,6 +24,19 @@ export type Activity = {
   file?: FileChange
   files?: FileChange[]
   gitNote?: string
+  /** A chamada foi feita por um subagente (o id do loop dele). */
+  agentId?: string
+}
+
+/** Um subagente lançado pela ferramenta Agent, ligado à chamada que o criou. */
+export type SubAgent = {
+  id: string
+  toolUseId: string
+  description: string
+  type: string
+  startedAt: number
+  status: 'running' | 'done'
+  endedAt?: number
 }
 
 export type FileChange = { path: string; content?: string; diff?: string }
@@ -89,6 +102,7 @@ declare module 'claude-code' {
       sideListShown: boolean
       sideListDismissed: boolean
       chatTools: ChatTools
+      agents: SubAgent[]
       fileLog: FileEvent[]
       /** Raízes de repositório git dos arquivos editados, para mostrar caminhos a partir do projeto. */
       projectRoots: string[]

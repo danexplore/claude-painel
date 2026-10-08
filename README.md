@@ -29,6 +29,7 @@ todos 20  ✎ edição 12  ▶ ação 8  leitura ○  ⚠ 1
 
 **Lista lateral (aberta sozinha a partir de 144 colunas)**
 - Cada mensagem sua vira um grupo; só o atual fica aberto.
+- Subagentes aparecem como um bloco `◇ tipo · descrição` com as chamadas deles dentro, contagem e tempo; o que está rodando fica aberto.
 - Cada chamada é edição (`✎`), ação (`▶`, `◆` para MCP) ou leitura (`·`). Leituras ficam escondidas atrás de um contador.
 - O rótulo é a descrição que o Claude escreveu, não o comando cru. Repetidos viram `×N`.
 - Clicar expande ali mesmo: comando, saída com `⎿`, e o diff de cada arquivo que mudou, com a linha real.
