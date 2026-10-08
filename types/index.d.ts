@@ -91,6 +91,8 @@ declare module 'claude-code' {
       sideListDismissed: boolean
       toolsInChat: boolean
       fileLog: FileEvent[]
+      /** Raízes de repositório git dos arquivos editados, para mostrar caminhos a partir do projeto. */
+      projectRoots: string[]
       requests: RequestGroup[]
       showReads: boolean
       toggledGroups: string[]

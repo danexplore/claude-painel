@@ -4,7 +4,7 @@ import { classifyShell, classifyToolCall, gitNote, isBookkeeping, isReadOnlyShel
 import { bar, cleanText, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
 import { activityItems, fitSegments, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
-import { filesChanged, homePath, mergeFileEvents } from '../hooks/lib/files'
+import { filesChanged, groupByProject, homePath, mergeFileEvents, projectPath } from '../hooks/lib/files'
 import { markdownBlocks, plainInline } from '../hooks/lib/markdown'
 import { parseGitStatus, parsePrView } from '../hooks/lib/parse'
 import type { Activity } from '../types'
@@ -454,6 +454,23 @@ describe('arquivos da sessão', () => {
   test('caminho na home vira ~', async () => {
     expect(homePath('/home/eu/x/a.ts', '/home/eu')).toBe('~/x/a.ts')
   })
+
+  test('dentro de um projeto, o caminho sai a partir da raiz dele', async () => {
+    expect(projectPath('/home/eu/mods/painel-dev/hooks/a.ts', ['/home/eu/mods/painel-dev'], '/home/eu')).toBe('./hooks/a.ts')
+  })
+
+  test('fora de projeto, o caminho continua com ~', async () => {
+    expect(projectPath('/home/eu/notas/a.md', ['/home/eu/mods/painel-dev'], '/home/eu')).toBe('~/notas/a.md')
+  })
+
+  test('projetos com nome parecido não se confundem', async () => {
+    expect(projectPath('/r/painel-dev/a.ts', ['/r/painel'], undefined)).toBe('/r/painel-dev/a.ts')
+  })
+
+  test('arquivos são agrupados por projeto', async () => {
+    const groups = groupByProject([{ path: '/r/a/x.ts' }, { path: '/r/b/y.ts' }, { path: '/r/a/z.ts' }, { path: '/tmp/w' }], ['/r/a', '/r/b'])
+    expect(groups.map(group => `${group.name}:${group.files.length}`)).toEqual(['a:2', 'b:1', 'fora de projeto:1'])
+  })
 })
 
 test('aba Arquivos lista o arquivo editado e mostra o diff ao abrir', async ($, on) => {
@@ -465,6 +482,20 @@ test('aba Arquivos lista o arquivo editado e mostra o diff ao abrir', async ($, 
   await ui.press({ key: 'files' })
   await ui.press({ key: 'file-open-/x/app.ts' })
   expect((await ui.find({ type: 'Code' })) !== undefined).toBe(true)
+  expect((await ui.find({ text: /fora de projeto/ })) !== undefined).toBe(true)
+  await ui.unmount()
+})
+
+test('aba Arquivos agrupa pelo projeto do git e mostra o caminho a partir da raiz', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('tool.call', () => ({ result: {}, text: 'ok' }))
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '/r/painel-dev\n', stderr: '' } }) as never)
+  await $.tool.call({ tool: 'Edit', tool_use_id: 'g1', file_path: '/r/painel-dev/hooks/a.ts', old_string: 'a', new_string: 'b' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'files' })
+  const found = [await ui.find({ text: /^painel-dev$/ }), await ui.find({ text: /^\.\/hooks\/a\.ts$/ })]
+  expect(found.map(node => node !== undefined)).toEqual([true, true])
   await ui.unmount()
 })
 

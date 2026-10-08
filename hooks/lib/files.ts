@@ -64,3 +64,31 @@ export function filesChanged(events: FileEvent[]): FileSummary[] {
 export function homePath(path: string, home: string | undefined): string {
   return home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
 }
+
+/** A raiz de projeto mais longa que contém o caminho, entre as já descobertas pelo git. */
+export function projectRootOf(path: string, roots: string[]): string | undefined {
+  return roots
+    .filter(root => path.startsWith(`${root}/`))
+    .sort((a, b) => b.length - a.length)[0]
+}
+
+/** `./hooks/lib/x.ts` dentro de um projeto conhecido; `~/…` fora dele. */
+export function projectPath(path: string, roots: string[], home: string | undefined): string {
+  const root = projectRootOf(path, roots)
+  return root ? `.${path.slice(root.length)}` : homePath(path, home)
+}
+
+export type ProjectGroup<T> = { root: string | undefined; name: string; files: T[] }
+
+/** Agrupa por projeto, na ordem em que cada projeto aparece pela primeira vez (o mais recente primeiro). */
+export function groupByProject<T extends { path: string }>(files: T[], roots: string[]): ProjectGroup<T>[] {
+  const groups = new Map<string, ProjectGroup<T>>()
+  files.forEach(file => {
+    const root = projectRootOf(file.path, roots)
+    const key = root ?? ''
+    const known = groups.get(key)
+    if (known) known.files.push(file)
+    else groups.set(key, { root, name: root ? root.split('/').pop() || root : 'fora de projeto', files: [file] })
+  })
+  return [...groups.values()]
+}

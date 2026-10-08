@@ -23,7 +23,7 @@ import {
   type Tone,
 } from './lib/layout'
 import { parseGitStatus, parsePrView } from './lib/parse'
-import { changesStat, filesChanged, homePath, mergeFileEvents } from './lib/files'
+import { changesStat, filesChanged, groupByProject, mergeFileEvents, projectPath, projectRootOf } from './lib/files'
 import { coloredStat, entryDetail, fileDiff } from './views/detail'
 
 const PANE = 'painel'
@@ -59,6 +59,7 @@ const sideListShown = atom({ plugin: 'painel', key: 'sideListShown' } as const, 
 const sideListDismissed = atom({ plugin: 'painel', key: 'sideListDismissed' } as const, false)
 const toolsInChat = atom({ plugin: 'painel', key: 'toolsInChat' } as const, false)
 const fileLog = atom({ plugin: 'painel', key: 'fileLog' } as const, [] as FileEvent[])
+const projectRoots = atom({ plugin: 'painel', key: 'projectRoots' } as const, [] as string[])
 const requests = atom({ plugin: 'painel', key: 'requests' } as const, [] as RequestGroup[])
 const showReads = atom({ plugin: 'painel', key: 'showReads' } as const, false)
 const toggledGroups = atom({ plugin: 'painel', key: 'toggledGroups' } as const, [] as string[])
@@ -181,6 +182,21 @@ function recordTask(list: Task[], id: string, change: Partial<Task>): Task[] {
 }
 
 let homeDir: string | undefined
+/** Pastas já consultadas que não estão em repositório git, para não perguntar de novo. */
+const dirsWithoutRepo = new Set<string>()
+
+async function learnProjectRoots($: Engine, paths: string[]): Promise<void> {
+  const known = [...(await read($, projectRoots))]
+  for (const path of new Set(paths)) {
+    const dir = path.slice(0, path.lastIndexOf('/')) || '/'
+    if (projectRootOf(path, known) || dirsWithoutRepo.has(dir)) continue
+    const top = await $.process.run(['git', '-C', dir, 'rev-parse', '--show-toplevel'], { timeoutMs: 5_000 }).catch(() => undefined)
+    const root = top?.exitCode === 0 ? top.stdout.trim() : ''
+    if (root && path.startsWith(`${root}/`)) known.push(root)
+    else dirsWithoutRepo.add(dir)
+  }
+  await update($, projectRoots, current => (current.length === known.length ? current : known))
+}
 let lastBranch: string | undefined
 let ticker: { cancel: () => void } | undefined
 
@@ -198,6 +214,7 @@ async function backfillFileLog($: Engine): Promise<void> {
       }),
     )
   await update($, fileLog, log => mergeFileEvents(events, log))
+  await learnProjectRoots($, events.map(event => event.path))
 }
 
 async function syncGit($: Engine): Promise<void> {
@@ -306,6 +323,7 @@ export const register: Register = on => {
       }
       if (changes.length > 0) {
         await update($, fileLog, log => mergeFileEvents(log, changes.map(change => ({ ...change, id, at: started }))))
+        await learnProjectRoots($, changes.map(change => change.path))
       }
       const output = cleanText(ran.deny ?? ran.text ?? '').slice(0, MAX_OUTPUT_CHARS)
       await update($, activity, list =>
@@ -471,6 +489,7 @@ export const register: Register = on => {
     const rule = <Text dimColor>{'─'.repeat(width)}</Text>
     const isCompact = (await read($, paneMode)) === 'compact'
     const changedFiles = filesChanged(await read($, fileLog))
+    const roots = await read($, projectRoots)
 
     const toggleExpanded = (id: string) =>
       void (async () => {
@@ -484,6 +503,7 @@ export const register: Register = on => {
         previewLines: isCompact ? COMPACT_PREVIEW_LINES : OUTPUT_PREVIEW_LINES,
         isFull: isFullOutput,
         home: homeDir,
+        roots,
         isNarrow: isCompact,
         onShowAll: () =>
           void (isCompact ? openPane($, { tab: 'activity', expand: entry.id }) : update($, showFullOutput, () => true)),
@@ -661,41 +681,56 @@ export const register: Register = on => {
           )}
           {rule}
           {changedFiles.length === 0 && <Text dimColor>Nenhum arquivo editado nesta sessão.</Text>}
-          {changedFiles.map(file => {
-            const key = `file:${file.path}`
-            const isOpen = expandedId === key
-            const stat = `${file.isWritten && file.removed === 0 ? 'novo · ' : ''}+${file.added} −${file.removed}`
-            const shown = homePath(file.path, homeDir)
+          {groupByProject(changedFiles, roots).map(group => {
+            const groupAdded = group.files.reduce((sum, file) => sum + file.added, 0)
+            const groupRemoved = group.files.reduce((sum, file) => sum + file.removed, 0)
             return (
-              <Box key={`file-${file.path}`} flexDirection="column" marginBottom={isOpen ? 1 : 0}>
+              <Box key={`project-${group.root ?? 'none'}`} flexDirection="column" marginBottom={1}>
                 <Box justifyContent="space-between">
-                  <Box>
-                    <Text color="warning">{isOpen ? '▾' : '✎'} </Text>
-                    <Button
-                      key={`file-open-${file.path}`}
-                      plain
-                      label={truncate(shown, Math.max(10, width - stat.length - 12))}
-                      onPress={() => toggleExpanded(key)}
-                    />
-                  </Box>
-                  {coloredStat(kit, `file-stat-${file.path}`, `${stat}  ${file.changes.length}×`)}
+                  <Text bold color={group.root ? 'claude' : undefined} dimColor={group.root ? undefined : true}>
+                    {group.name}
+                  </Text>
+                  {coloredStat(kit, `project-stat-${group.root ?? 'none'}`, `+${groupAdded} −${groupRemoved}`)}
                 </Box>
-                {isOpen && (
-                  <Box flexDirection="column" paddingLeft={2}>
-                    {file.changes.map((change, index) => (
-                      <Box key={`file-change-${change.id}-${index}`} flexDirection="column">
-                        <Text dimColor>── {change.at ? clockTime(change.at) : 'antes'} ──</Text>
-                        {fileDiff(kit, `${change.id}-${index}`, change, {
-                          width: width - 4,
-                          previewLines: OUTPUT_PREVIEW_LINES,
-                          isFull: isFullOutput,
-                          home: homeDir,
-                          onShowAll: () => void update($, showFullOutput, () => true),
-                        })}
+              {group.files.map(file => {
+                const key = `file:${file.path}`
+                const isOpen = expandedId === key
+                const stat = `${file.isWritten && file.removed === 0 ? 'novo · ' : ''}+${file.added} −${file.removed}`
+                const shown = projectPath(file.path, roots, homeDir)
+                return (
+                  <Box key={`file-${file.path}`} flexDirection="column" marginBottom={isOpen ? 1 : 0}>
+                    <Box justifyContent="space-between">
+                      <Box>
+                        <Text color="warning">{isOpen ? '▾' : '✎'} </Text>
+                        <Button
+                          key={`file-open-${file.path}`}
+                          plain
+                          label={truncate(shown, Math.max(10, width - stat.length - 12))}
+                          onPress={() => toggleExpanded(key)}
+                        />
                       </Box>
-                    ))}
+                      {coloredStat(kit, `file-stat-${file.path}`, `${stat}  ${file.changes.length}×`)}
+                    </Box>
+                    {isOpen && (
+                      <Box flexDirection="column" paddingLeft={2}>
+                        {file.changes.map((change, index) => (
+                          <Box key={`file-change-${change.id}-${index}`} flexDirection="column">
+                            <Text dimColor>── {change.at ? clockTime(change.at) : 'antes'} ──</Text>
+                            {fileDiff(kit, `${change.id}-${index}`, change, {
+                              width: width - 4,
+                              previewLines: OUTPUT_PREVIEW_LINES,
+                              isFull: isFullOutput,
+                              home: homeDir,
+                              roots,
+                              onShowAll: () => void update($, showFullOutput, () => true),
+                            })}
+                          </Box>
+                        ))}
+                      </Box>
+                    )}
                   </Box>
-                )}
+                )
+              })}
               </Box>
             )
           })}

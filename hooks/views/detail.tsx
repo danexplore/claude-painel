@@ -1,7 +1,7 @@
 import type { Elements, RenderNode } from 'claude-code'
 
 import type { Activity, FileChange } from '../../types'
-import { changesOf, diffCounts, homePath } from '../lib/files'
+import { changesOf, diffCounts, projectPath } from '../lib/files'
 import { cleanText, truncate } from '../lib/format'
 import { markdownView } from './markdown'
 import {
@@ -26,6 +26,8 @@ export type DetailOptions = {
   /** Na aba Arquivos: mostra só a troca deste arquivo, mesmo que o comando tenha mudado vários. */
   onlyPath?: string
   home?: string
+  /** Raízes de projeto (git) já descobertas: caminhos saem como `./…` a partir delas. */
+  roots?: string[]
   /** Lista lateral: linhas cortadas com … em vez de quebrar, caminhos curtos. */
   isNarrow?: boolean
 }
@@ -63,7 +65,7 @@ export function coloredStat(kit: Kit, key: string, text: string): RenderNode {
 
 /** Na lista estreita, as duas últimas partes do caminho bastam: `…/.claude-plugin/plugin.json`. */
 function displayPath(path: string, options: DetailOptions): string {
-  const shown = homePath(path, options.home)
+  const shown = projectPath(path, options.roots ?? [], options.home)
   if (!options.isNarrow) return shown
   const parts = shown.split('/').filter(Boolean)
   return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : shown
