@@ -30,6 +30,8 @@ const COMPACT_COLUMNS = 42
 const FULL_COLUMNS = 100
 const COMPACT_TASKS = 5
 const INLINE_ROWS = 14
+const COMPACT_PREVIEW_LINES = 12
+const COMPACT_DETAIL_LINES = 3
 
 const activity = atom({ plugin: 'painel', key: 'activity' } as const, [] as Activity[])
 const unseenCritical = atom({ plugin: 'painel', key: 'unseenCritical' } as const, [] as string[])
@@ -123,7 +125,11 @@ async function openPane($: Engine, target: PaneTarget): Promise<void> {
   await update($, paneMode, () => 'full')
   await update($, tab, () => target.tab)
   if (target.filter) await update($, filter, () => target.filter!)
-  if (target.expand) await update($, expanded, () => target.expand!)
+  if (target.expand) {
+    const entry = (await read($, activity)).find(one => one.id === target.expand)
+    if (entry && !matchesFilter(entry, await read($, filter))) await update($, filter, () => 'all')
+    await update($, expanded, () => target.expand!)
+  }
   await update($, unseenCritical, () => [])
   await update($, sideListDismissed, () => false)
   const placed = await opened
@@ -362,7 +368,7 @@ export const register: Register = on => {
               plain
               dimColor={item.activity.kind === 'plain' && item.activity.status === 'ok' ? true : undefined}
               label={item.label}
-              onPress={() => void openPane($, { tab: 'activity', filter: 'all', expand: item.activity.id })}
+              onPress={() => void openPane($, { tab: 'activity', expand: item.activity.id })}
             />
             {item.suffix && renderPiece(item.suffix, `suffix-${item.activity.id}`)}
           </Box>
@@ -460,19 +466,44 @@ export const register: Register = on => {
             const tone: Tone = isRunning ? 'warn' : isError || entry.kind === 'critical' ? 'high' : entry.kind === 'plain' ? 'dim' : entry.kind
             const tail = isRunning ? ` ${duration(currentTime - entry.startedAt)}` : repeatSuffix(count)
             const label = truncate(entry.label, Math.max(4, width - 2 - tail.length))
+            const isOpen = entry.id === expandedId
+            const outputLines = (entry.output ?? '').split('\n')
+            const detailLines = entry.detail.split('\n')
             return (
-              <Box key={`crow-${entry.id}`}>
-                <Text {...TONE_STYLE[tone]} bold={entry.kind === 'critical'}>
-                  {icon}{' '}
-                </Text>
-                <Button
-                  key={`copen-${entry.id}`}
-                  plain
-                  dimColor={entry.kind === 'plain' && !isError ? true : undefined}
-                  label={label}
-                  onPress={() => void openPane($, { tab: 'activity', filter: 'all', expand: entry.id })}
-                />
-                {tail && <Text dimColor>{tail}</Text>}
+              <Box key={`crow-${entry.id}`} flexDirection="column">
+                <Box>
+                  <Text {...TONE_STYLE[tone]} bold={entry.kind === 'critical'}>
+                    {isOpen ? '▾' : icon}{' '}
+                  </Text>
+                  <Button
+                    key={`copen-${entry.id}`}
+                    plain
+                    dimColor={entry.kind === 'plain' && !isError && !isOpen ? true : undefined}
+                    label={label}
+                    onPress={() => void update($, expanded, current => (current === entry.id ? null : entry.id))}
+                  />
+                  {tail && <Text dimColor>{tail}</Text>}
+                </Box>
+                {isOpen && (
+                  <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
+                    <Text dimColor>{detailLines.slice(0, COMPACT_DETAIL_LINES).join('\n')}</Text>
+                    {entry.output ? (
+                      <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+                        <Text color={isError ? 'error' : undefined}>{outputLines.slice(0, COMPACT_PREVIEW_LINES).join('\n')}</Text>
+                      </Box>
+                    ) : (
+                      <Text dimColor>(sem saída)</Text>
+                    )}
+                    {(outputLines.length > COMPACT_PREVIEW_LINES || detailLines.length > COMPACT_DETAIL_LINES) && (
+                      <Button
+                        key={`cfull-${entry.id}`}
+                        plain
+                        label={`ver tudo · ${outputLines.length} linhas`}
+                        onPress={() => void openPane($, { tab: 'activity', expand: entry.id })}
+                      />
+                    )}
+                  </Box>
+                )}
               </Box>
             )
           })}
