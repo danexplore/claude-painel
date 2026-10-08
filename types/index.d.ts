@@ -2,16 +2,28 @@ export type ActivityKind = 'critical' | 'mcp' | 'cli' | 'plain'
 
 export type ActivityStatus = 'running' | 'ok' | 'error'
 
+export type ActivityCategory = 'edit' | 'action' | 'read'
+
+export type RequestGroup = { id: string; text: string; startedAt: number }
+
 export type Activity = {
   id: string
   startedAt: number
   kind: ActivityKind
+  category: ActivityCategory
+  groupId: string
   label: string
   detail: string
   status: ActivityStatus
   ms?: number
   output?: string
+  stat?: string
+  sql?: string
+  isMcp?: true
+  file?: FileChange
 }
+
+export type FileChange = { path: string; content?: string; diff?: string }
 
 export type TaskStatus = 'pending' | 'in_progress' | 'completed'
 
@@ -48,7 +60,7 @@ export type UsageInfo = {
 
 export type PaneTab = 'activity' | 'tasks'
 
-export type ActivityFilter = 'all' | 'critical' | 'mcp' | 'cli'
+export type ActivityFilter = 'all' | 'edit' | 'action' | 'read' | 'critical'
 
 export type PaneMode = 'compact' | 'full'
 
@@ -72,6 +84,10 @@ declare module 'claude-code' {
       sideListShown: boolean
       sideListDismissed: boolean
       toolsInChat: boolean
+      requests: RequestGroup[]
+      showReads: boolean
+      toggledGroups: string[]
+      readsOpenIn: string[]
     }
   }
 }

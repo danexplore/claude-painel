@@ -1,12 +1,18 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Activity, ActivityFilter, GitInfo, PaneMode, PaneTab, PrInfo, Task, TaskStatus, UsageInfo } from '../types'
-import { classifyToolCall, isBookkeeping } from './lib/classify'
+import type { Activity, ActivityFilter, GitInfo, PaneMode, PaneTab, PrInfo, RequestGroup, Task, TaskStatus, UsageInfo } from '../types'
+import { classifyToolCall, isBookkeeping, settleCategory } from './lib/classify'
 import { clockTime, duration, truncate } from './lib/format'
 import {
-  KIND_ICON,
   activityItems,
+  categoryOf,
+  countCategories,
+  countsLabel,
+  groupByRequest,
+  iconFor,
+  readsLabel,
+  sinceLabel,
   fitSegments,
   groupRepeats,
   repeatSuffix,
@@ -17,6 +23,7 @@ import {
   type Tone,
 } from './lib/layout'
 import { parseGitStatus, parsePrView } from './lib/parse'
+import { entryDetail } from './views/detail'
 
 const PANE = 'painel'
 const MAX_ACTIVITY = 200
@@ -50,6 +57,10 @@ const paneMode = atom({ plugin: 'painel', key: 'paneMode' } as const, 'compact' 
 const sideListShown = atom({ plugin: 'painel', key: 'sideListShown' } as const, false)
 const sideListDismissed = atom({ plugin: 'painel', key: 'sideListDismissed' } as const, false)
 const toolsInChat = atom({ plugin: 'painel', key: 'toolsInChat' } as const, false)
+const requests = atom({ plugin: 'painel', key: 'requests' } as const, [] as RequestGroup[])
+const showReads = atom({ plugin: 'painel', key: 'showReads' } as const, false)
+const toggledGroups = atom({ plugin: 'painel', key: 'toggledGroups' } as const, [] as string[])
+const readsOpenIn = atom({ plugin: 'painel', key: 'readsOpenIn' } as const, [] as string[])
 
 const TONE_STYLE: Record<Tone, { color?: string; dimColor?: boolean }> = {
   normal: {},
@@ -60,8 +71,13 @@ const TONE_STYLE: Record<Tone, { color?: string; dimColor?: boolean }> = {
   cli: { color: 'cyan' },
 }
 
-const FILTER_LABEL: Record<ActivityFilter, string> = { all: 'todos', critical: '⚠ críticos', mcp: '◆ MCP', cli: '⚙ CLI' }
-const COMPACT_FILTER_LABEL: Record<ActivityFilter, string> = { all: 'todos', critical: 'crítico', mcp: 'MCP', cli: 'CLI' }
+const FILTERS = ['all', 'edit', 'action', 'read', 'critical'] as const
+const FILTER_LABEL: Record<ActivityFilter, string> = { all: 'todos', edit: '✎ edição', action: '▶ ação', read: '· leitura', critical: '⚠' }
+const REQUEST_TEXT_MAX = 28
+
+function knownFilter(value: string): ActivityFilter {
+  return (FILTERS as readonly string[]).includes(value) ? (value as ActivityFilter) : 'all'
+}
 
 const GIT_TOUCHING_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'Bash'])
 
@@ -222,6 +238,17 @@ export const register: Register = on => {
     return next(e)
   })
 
+  on('prompt.submit', async ($, e, next) => {
+    const result = await next(e)
+    const text = e.text.trim()
+    if (text && !text.startsWith('/')) {
+      const request: RequestGroup = { id: `req-${Date.now()}`, text: text.split('\n')[0]!, startedAt: Date.now() }
+      await update($, requests, list => [...list, request].slice(-MAX_ACTIVITY))
+      await update($, toggledGroups, () => [])
+    }
+    return result
+  })
+
   on('turn.complete', async ($, e, next) => {
     await ensureSideList($)
     await update($, turns, count => count + 1)
@@ -237,8 +264,9 @@ export const register: Register = on => {
     const isTracked = !isBookkeeping(String(e.tool))
 
     if (isTracked) {
+      const groupId = (await read($, requests)).at(-1)?.id ?? 'inicio'
       await update($, activity, list =>
-        [...list, { id, startedAt: started, status: 'running' as const, ...classified }].slice(-MAX_ACTIVITY),
+        [...list, { id, startedAt: started, status: 'running' as const, groupId, ...classified }].slice(-MAX_ACTIVITY),
       )
       await update($, now, () => started)
       ensureTicker($)
@@ -252,7 +280,13 @@ export const register: Register = on => {
       await update($, activity, list =>
         list.map(entry =>
           entry.id === id
-            ? { ...entry, status: isError ? ('error' as const) : ('ok' as const), ms: Date.now() - started, output }
+            ? {
+                ...entry,
+                status: isError ? ('error' as const) : ('ok' as const),
+                ms: Date.now() - started,
+                output,
+                category: settleCategory(classified.category, ran.isReadOnly === true),
+              }
             : entry,
         ),
       )
@@ -350,8 +384,9 @@ export const register: Register = on => {
       </Box>
     )
 
+    const isReadsShown = await read($, showReads)
     const items = activityItems(
-      await read($, activity),
+      (await read($, activity)).filter(entry => isReadsShown || categoryOf(entry) !== 'read'),
       await read($, unseenCritical),
       Math.max(0, width - ACTIVITY_HOTKEY_WIDTH),
       currentTime,
@@ -366,7 +401,7 @@ export const register: Register = on => {
             <Button
               key={`open-${item.activity.id}`}
               plain
-              dimColor={item.activity.kind === 'plain' && item.activity.status === 'ok' ? true : undefined}
+              dimColor={categoryOf(item.activity) === 'read' && item.activity.status === 'ok' ? true : undefined}
               label={item.label}
               onPress={() => void openPane($, { tab: 'activity', expand: item.activity.id })}
             />
@@ -389,42 +424,92 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text, Button, Code, Markdown } = $.ui.resolve(e)
+    const kit = { Box, Text, Button, Code, Markdown }
     const width = Math.max(30, e.props.bodyColumns - 1)
-    const currentTab = await read($, tab)
-    const currentFilter = await read($, filter)
     const list = await read($, activity)
     const taskList = await read($, tasks)
     const expandedId = await read($, expanded)
     const isFullOutput = await read($, showFullOutput)
+    const currentFilter = knownFilter(await read($, filter))
+    const isReadsShown = await read($, showReads)
     const currentTime = (await read($, now)) || Date.now()
     const rule = <Text dimColor>{'─'.repeat(width)}</Text>
+    const isCompact = (await read($, paneMode)) === 'compact'
 
-    if ((await read($, paneMode)) === 'compact') {
-      const isToolsInChat = await read($, toolsInChat)
-      const openTasks = taskList.filter(task => task.status !== 'completed')
-      const doneTasks = taskList.length - openTasks.length
-      const shownTasks = openTasks.slice(0, COMPACT_TASKS)
-      const headerRows = 4 + (taskList.length > 0 ? shownTasks.length + 2 : 0)
-      const room = Math.max(3, (e.viewport?.rows ?? 30) - headerRows)
-      const filtered = [...list].reverse().filter(entry => matchesFilter(entry, currentFilter))
-      const groups = groupRepeats(filtered).slice(0, room)
-      const filterButton = (kind: ActivityFilter) => (
-        <Box key={`cfilter-${kind}`}>
-          {kind !== 'all' && (
-            <Text {...TONE_STYLE[kind === 'critical' ? 'high' : kind]} dimColor={currentFilter !== kind ? true : undefined}>
-              {KIND_ICON[kind]}
+    const toggleExpanded = (id: string) =>
+      void (async () => {
+        await update($, showFullOutput, () => false)
+        await update($, expanded, current => (current === id ? null : id))
+      })()
+
+    const detailFor = (entry: Activity, detailWidth: number) =>
+      entryDetail(kit, entry, {
+        width: detailWidth,
+        previewLines: isCompact ? COMPACT_PREVIEW_LINES : OUTPUT_PREVIEW_LINES,
+        isFull: isFullOutput,
+        onShowAll: () =>
+          void (isCompact ? openPane($, { tab: 'activity', expand: entry.id }) : update($, showFullOutput, () => true)),
+      })
+
+    const entryRow = (entry: Activity, count: number, labelRoom: number) => {
+      const icon = iconFor(entry)
+      const isOpen = entry.id === expandedId
+      const isRunning = entry.status === 'running'
+      const tail = isRunning ? ` ${duration(currentTime - entry.startedAt)}` : `${entry.stat ? ` ${entry.stat}` : ''}${repeatSuffix(count)}`
+      return (
+        <Box key={`row-${entry.id}`} flexDirection="column">
+          <Box>
+            <Text {...TONE_STYLE[icon.tone ?? 'normal']} bold={icon.bold}>
+              {isOpen ? '▾' : icon.text}{' '}
             </Text>
-          )}
-          <Button
-            key={`cfilter-btn-${kind}`}
-            plain
-            dimColor={currentFilter !== kind ? true : undefined}
-            label={`${kind === 'all' ? '' : ' '}${COMPACT_FILTER_LABEL[kind]} ${list.filter(entry => matchesFilter(entry, kind)).length}`}
-            onPress={() => void update($, filter, current => (current === kind && kind !== 'all' ? 'all' : kind))}
-          />
+            <Button
+              key={`open-${entry.id}`}
+              plain
+              dimColor={categoryOf(entry) === 'read' && entry.status !== 'error' && !isOpen ? true : undefined}
+              label={truncate(entry.label, Math.max(4, labelRoom - tail.length))}
+              onPress={() => toggleExpanded(entry.id)}
+            />
+            {tail && <Text dimColor>{tail}</Text>}
+          </Box>
+          {isOpen && <Box paddingLeft={2}>{detailFor(entry, labelRoom)}</Box>}
         </Box>
       )
+    }
+
+    const counts = countCategories(list)
+    const criticalCount = list.filter(entry => entry.kind === 'critical').length
+    const filterButton = (kind: ActivityFilter, total: number) => (
+      <Button
+        key={`filter-${kind}`}
+        plain
+        dimColor={currentFilter !== kind ? true : undefined}
+        label={`${FILTER_LABEL[kind]} ${total}`}
+        onPress={() => void update($, filter, current => (current === kind ? 'all' : kind))}
+      />
+    )
+    const filters = (
+      <Box gap={2}>
+        {filterButton('edit', counts.edit)}
+        {filterButton('action', counts.action)}
+        <Button
+          key="reads-toggle"
+          plain
+          dimColor={!isReadsShown ? true : undefined}
+          label={`leitura ${isReadsShown ? '●' : '○'}`}
+          onPress={() => void update($, showReads, shown => !shown)}
+        />
+        {criticalCount > 0 && filterButton('critical', criticalCount)}
+      </Box>
+    )
+
+    if (isCompact) {
+      const isToolsInChat = await read($, toolsInChat)
+      const openTasks = taskList.filter(task => task.status !== 'completed')
+      const shownTasks = openTasks.slice(0, COMPACT_TASKS)
+      const toggled = await read($, toggledGroups)
+      const readsOpen = await read($, readsOpenIn)
+      const views = groupByRequest(list, await read($, requests))
 
       return (
         <Box flexDirection="column">
@@ -442,13 +527,12 @@ export const register: Register = on => {
               <Button key="expand" plain hotkey="a" label="abrir" onPress={() => void openPane($, { tab: 'activity' })} />
             </Box>
           </Box>
-          <Box gap={2}>{(['all', 'critical', 'mcp', 'cli'] as const).map(filterButton)}</Box>
-          <Text dimColor>· comum  ✗ erro  ▶ rodando  ×N repetido</Text>
+          {filters}
           {rule}
           {taskList.length > 0 && (
             <Box flexDirection="column">
               <Text dimColor>
-                Tarefas {doneTasks}/{taskList.length}
+                Tarefas {taskList.length - openTasks.length}/{taskList.length}
               </Text>
               {shownTasks.map(task => (
                 <Text key={`ctask-${task.id}`} color={task.status === 'in_progress' ? 'warning' : undefined} dimColor={task.status === 'pending'}>
@@ -458,50 +542,42 @@ export const register: Register = on => {
               {rule}
             </Box>
           )}
-          {groups.length === 0 && <Text dimColor>Nada por aqui ainda.</Text>}
-          {groups.map(({ activity: entry, count }) => {
-            const isRunning = entry.status === 'running'
-            const isError = entry.status === 'error'
-            const icon = isRunning ? '▶' : isError ? '✗' : KIND_ICON[entry.kind]
-            const tone: Tone = isRunning ? 'warn' : isError || entry.kind === 'critical' ? 'high' : entry.kind === 'plain' ? 'dim' : entry.kind
-            const tail = isRunning ? ` ${duration(currentTime - entry.startedAt)}` : repeatSuffix(count)
-            const label = truncate(entry.label, Math.max(4, width - 2 - tail.length))
-            const isOpen = entry.id === expandedId
-            const outputLines = (entry.output ?? '').split('\n')
-            const detailLines = entry.detail.split('\n')
+          {views.length === 0 && <Text dimColor>Nada por aqui ainda.</Text>}
+          {views.map((view, index) => {
+            const id = view.request.id
+            const isOpen = (index === 0) !== toggled.includes(id)
+            const areReadsOpen = isReadsShown || readsOpen.includes(id) || currentFilter === 'read'
+            const matching = view.entries.filter(entry => matchesFilter(entry, currentFilter))
+            const visible = matching.filter(entry => areReadsOpen || categoryOf(entry) !== 'read')
+            const hiddenReads = matching.length - visible.length
+            const summary = countsLabel(view.counts)
+            const since = sinceLabel(currentTime - view.request.startedAt)
+            const title = `"${truncate(view.request.text, REQUEST_TEXT_MAX)}"`
             return (
-              <Box key={`crow-${entry.id}`} flexDirection="column">
-                <Box>
-                  <Text {...TONE_STYLE[tone]} bold={entry.kind === 'critical'}>
-                    {isOpen ? '▾' : icon}{' '}
-                  </Text>
+              <Box key={`group-${id}`} flexDirection="column" marginBottom={isOpen ? 1 : 0}>
+                <Box justifyContent="space-between">
                   <Button
-                    key={`copen-${entry.id}`}
+                    key={`group-toggle-${id}`}
                     plain
-                    dimColor={entry.kind === 'plain' && !isError && !isOpen ? true : undefined}
-                    label={label}
-                    onPress={() => void update($, expanded, current => (current === entry.id ? null : entry.id))}
+                    dimColor={!isOpen ? true : undefined}
+                    label={`${isOpen ? '▾' : '▸'} ${title}${summary ? ` · ${summary}` : ''}`}
+                    onPress={() => void update($, toggledGroups, ids => (ids.includes(id) ? ids.filter(one => one !== id) : [...ids, id]))}
                   />
-                  {tail && <Text dimColor>{tail}</Text>}
+                  <Text dimColor>{since}</Text>
                 </Box>
                 {isOpen && (
-                  <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
-                    <Text dimColor>{detailLines.slice(0, COMPACT_DETAIL_LINES).join('\n')}</Text>
-                    {entry.output ? (
-                      <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
-                        <Text color={isError ? 'error' : undefined}>{outputLines.slice(0, COMPACT_PREVIEW_LINES).join('\n')}</Text>
-                      </Box>
-                    ) : (
-                      <Text dimColor>(sem saída)</Text>
-                    )}
-                    {(outputLines.length > COMPACT_PREVIEW_LINES || detailLines.length > COMPACT_DETAIL_LINES) && (
+                  <Box flexDirection="column" paddingLeft={2}>
+                    {groupRepeats(visible).map(({ activity: entry, count }) => entryRow(entry, count, width - 4))}
+                    {hiddenReads > 0 && (
                       <Button
-                        key={`cfull-${entry.id}`}
+                        key={`reads-${id}`}
                         plain
-                        label={`ver tudo · ${outputLines.length} linhas`}
-                        onPress={() => void openPane($, { tab: 'activity', expand: entry.id })}
+                        dimColor
+                        label={`· ${readsLabel(hiddenReads)}`}
+                        onPress={() => void update($, readsOpenIn, ids => [...ids, id])}
                       />
                     )}
+                    {visible.length === 0 && hiddenReads === 0 && <Text dimColor>nada neste filtro</Text>}
                   </Box>
                 )}
               </Box>
@@ -511,6 +587,7 @@ export const register: Register = on => {
       )
     }
 
+    const currentTab = await read($, tab)
     const tabs = (
       <Box gap={3}>
         <Button key="compact" plain hotkey="c" dimColor label="◂ compactar" onPress={() => void openSideList($)} />
@@ -535,26 +612,11 @@ export const register: Register = on => {
       )
     }
 
-    const count = (kind: ActivityFilter) => list.filter(entry => matchesFilter(entry, kind)).length
-    const filters = (
-      <Box gap={3}>
-        {(['all', 'critical', 'mcp', 'cli'] as const).map(kind => (
-          <Button
-            key={`filter-${kind}`}
-            plain
-            dimColor={currentFilter !== kind ? true : undefined}
-            label={`${currentFilter === kind ? '▸ ' : ''}${FILTER_LABEL[kind]} ${count(kind)}`}
-            onPress={() => void update($, filter, () => kind)}
-          />
-        ))}
-      </Box>
-    )
-
-    const rows = [...list].reverse().filter(entry => matchesFilter(entry, currentFilter))
     const TIME_COL = 6
-    const ICON_COL = 2
-    const DURATION_COL = 6
-    const labelWidth = Math.max(10, width - TIME_COL - ICON_COL - DURATION_COL)
+    const rows = [...list]
+      .reverse()
+      .filter(entry => matchesFilter(entry, currentFilter))
+      .filter(entry => isReadsShown || currentFilter === 'read' || categoryOf(entry) !== 'read' || entry.id === expandedId)
 
     return (
       <Box flexDirection="column">
@@ -563,56 +625,16 @@ export const register: Register = on => {
         {rule}
         {rows.length === 0 && <Text dimColor>Nada por aqui ainda.</Text>}
         {rows.map((entry, index) => {
-          const isOpen = entry.id === expandedId
           const time = clockTime(entry.startedAt)
           const showTime = index === 0 || clockTime(rows[index - 1]!.startedAt) !== time
-          const isRunning = entry.status === 'running'
-          const isError = entry.status === 'error'
-          const icon = isRunning ? '▶' : isError ? '✗' : KIND_ICON[entry.kind]
-          const iconColor = isRunning ? 'warning' : isError || entry.kind === 'critical' ? 'error' : entry.kind === 'mcp' ? 'magenta' : entry.kind === 'cli' ? 'cyan' : undefined
-          const elapsed = isRunning ? currentTime - entry.startedAt : entry.ms
-          const label = truncate(entry.label, labelWidth)
-          const outputLines = (entry.output ?? '').split('\n')
-          const shownOutput = isFullOutput ? outputLines : outputLines.slice(0, OUTPUT_PREVIEW_LINES)
+          const elapsed = entry.status === 'running' ? currentTime - entry.startedAt : entry.ms
           return (
-            <Box key={`row-${entry.id}`} flexDirection="column">
-              <Box>
-                <Text dimColor>{(showTime ? time : '').padEnd(TIME_COL)}</Text>
-                <Text color={iconColor} dimColor={iconColor === undefined} bold={entry.kind === 'critical'}>
-                  {icon.padEnd(ICON_COL)}
-                </Text>
-                <Button
-                  key={`toggle-${entry.id}`}
-                  plain
-                  dimColor={entry.kind === 'plain' && !isError && !isOpen ? true : undefined}
-                  label={label}
-                  onPress={() =>
-                    void (async () => {
-                      await update($, showFullOutput, () => false)
-                      await update($, expanded, current => (current === entry.id ? null : entry.id))
-                    })()
-                  }
-                />
-                <Text>{' '.repeat(Math.max(0, labelWidth - label.length))}</Text>
-                <Text dimColor color={isError ? 'error' : undefined}>
-                  {(elapsed === undefined ? '' : duration(elapsed)).padStart(DURATION_COL)}
-                </Text>
+            <Box key={`full-${entry.id}`}>
+              <Text dimColor>{(showTime ? time : '').padEnd(TIME_COL)}</Text>
+              <Box flexDirection="column" flexGrow={1}>
+                {entryRow(entry, 1, width - TIME_COL - 8)}
               </Box>
-              {isOpen && (
-                <Box flexDirection="column" paddingLeft={TIME_COL + ICON_COL} paddingBottom={1}>
-                  <Text dimColor>{entry.detail}</Text>
-                  {entry.output ? (
-                    <Box flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
-                      <Text color={isError ? 'error' : undefined}>{shownOutput.join('\n')}</Text>
-                    </Box>
-                  ) : (
-                    <Text dimColor>(sem saída)</Text>
-                  )}
-                  {!isFullOutput && outputLines.length > OUTPUT_PREVIEW_LINES && (
-                    <Button key={`full-${entry.id}`} plain label={`ver tudo · ${outputLines.length} linhas`} onPress={() => void update($, showFullOutput, () => true)} />
-                  )}
-                </Box>
-              )}
+              <Text dimColor>{(elapsed === undefined ? '' : duration(elapsed)).padStart(6)}</Text>
             </Box>
           )
         })}

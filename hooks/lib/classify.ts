@@ -1,6 +1,15 @@
-import type { ActivityKind } from '../../types'
+import type { ActivityCategory, ActivityKind, FileChange } from '../../types'
 
-export type Classified = { kind: ActivityKind; label: string; detail: string }
+export type Classified = {
+  kind: ActivityKind
+  category: ActivityCategory
+  label: string
+  detail: string
+  stat?: string
+  sql?: string
+  isMcp?: true
+  file?: FileChange
+}
 
 const CRITICAL_SHELL = [
   /\brm\s+-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)/i,
@@ -103,10 +112,71 @@ function stringField(input: Record<string, unknown>, field: string): string | un
   return typeof value === 'string' ? value : undefined
 }
 
+const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'NotebookRead', 'BashOutput'])
+const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
+const MCP_READ = /^(?:get|list|search|read|fetch|query_logs)_?/
+const SHELL_EDIT = [/\bsed\s+(?:-[a-z]*\s+)*-i/, /\bperl\s+(?:-[a-z]*\s+)*-[a-z]*i/, /\btee\b/, /(?:^|[^>&2])>>?\s*(?!\/dev\/null|&)[\w~./"'-]/]
+
+function lineCount(text: string | undefined): number {
+  return text ? text.split('\n').length : 0
+}
+
+function editStat(tool: string, input: Record<string, unknown>): string | undefined {
+  if (tool === 'Edit') return `+${lineCount(stringField(input, 'new_string'))} −${lineCount(stringField(input, 'old_string'))}`
+  if (tool === 'MultiEdit' && Array.isArray(input['edits'])) {
+    const edits = input['edits'] as Record<string, unknown>[]
+    const added = edits.reduce((sum, edit) => sum + lineCount(stringField(edit, 'new_string')), 0)
+    const removed = edits.reduce((sum, edit) => sum + lineCount(stringField(edit, 'old_string')), 0)
+    return `+${added} −${removed}`
+  }
+  if (tool === 'Write') return `${lineCount(stringField(input, 'content'))} linhas`
+  return undefined
+}
+
+const MAX_FILE_CHARS = 20_000
+
+function hunk(oldText: string, newText: string): string {
+  const removed = oldText.split('\n')
+  const added = newText.split('\n')
+  return [
+    `@@ -1,${removed.length} +1,${added.length} @@`,
+    ...removed.map(line => `-${line}`),
+    ...added.map(line => `+${line}`),
+  ].join('\n')
+}
+
+/** O que a edição mudou, para mostrar ao expandir: o conteúdo escrito ou um diff de cada troca. */
+function fileChange(tool: string, input: Record<string, unknown>, path: string): FileChange | undefined {
+  if (tool === 'Write') return { path, content: (stringField(input, 'content') ?? '').slice(0, MAX_FILE_CHARS) }
+  const edits =
+    tool === 'MultiEdit' && Array.isArray(input['edits'])
+      ? (input['edits'] as Record<string, unknown>[])
+      : tool === 'Edit'
+        ? [input]
+        : []
+  if (edits.length === 0) return undefined
+  const diff = edits
+    .map(edit => hunk(stringField(edit, 'old_string') ?? '', stringField(edit, 'new_string') ?? ''))
+    .join('\n')
+  return { path, diff: diff.slice(0, MAX_FILE_CHARS) }
+}
+
+/** O tipo antes de rodar; um Bash que o Claude Code marcar como somente leitura vira leitura depois. */
+export function settleCategory(category: ActivityCategory, isReadOnly: boolean): ActivityCategory {
+  return category === 'action' && isReadOnly ? 'read' : category
+}
+
 export function classifyToolCall(tool: string, input: Record<string, unknown>): Classified {
   if (tool === 'Bash') {
     const command = stringField(input, 'command') ?? ''
-    return { kind: classifyShell(command), label: shellLabel(command), detail: command }
+    const description = stringField(input, 'description')
+    const clean = stripRtk(command)
+    return {
+      kind: classifyShell(command),
+      category: SHELL_EDIT.some(rule => rule.test(clean)) ? 'edit' : 'action',
+      label: description ? oneLine(description) : shellLabel(command),
+      detail: command,
+    }
   }
 
   const mcp = parseMcpTool(tool)
@@ -115,21 +185,31 @@ export function classifyToolCall(tool: string, input: Record<string, unknown>): 
     const isCritical = CRITICAL_MCP_TOOL.test(mcp.name) || (sql !== undefined && isCriticalSql(sql))
     return {
       kind: isCritical ? 'critical' : 'mcp',
+      category: !isCritical && MCP_READ.test(mcp.name) ? 'read' : 'action',
       label: `${mcp.server} · ${mcp.name}`,
       detail: sql ?? JSON.stringify(input, null, 2),
+      ...(sql !== undefined ? { sql } : {}),
+      isMcp: true,
     }
   }
 
   const path = stringField(input, 'file_path') ?? stringField(input, 'notebook_path')
+  const isEdit = EDIT_TOOLS.has(tool)
   const target =
     (path && basename(path)) ??
-    stringField(input, 'pattern') ??
     stringField(input, 'description') ??
+    stringField(input, 'pattern') ??
     stringField(input, 'url') ??
+    stringField(input, 'query') ??
     ''
+  const stat = editStat(tool, input)
+  const file = isEdit && path ? fileChange(tool, input, path) : undefined
   return {
     kind: 'plain',
-    label: target ? `${tool} ${oneLine(target)}` : tool,
+    category: isEdit ? 'edit' : READ_TOOLS.has(tool) ? 'read' : 'action',
+    label: isEdit && path ? basename(path) : target ? `${tool} ${oneLine(target)}` : tool,
     detail: path ?? JSON.stringify(input, null, 2),
+    ...(stat ? { stat } : {}),
+    ...(file ? { file } : {}),
   }
 }

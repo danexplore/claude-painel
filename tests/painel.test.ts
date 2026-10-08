@@ -1,8 +1,9 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { classifyShell, classifyToolCall, isBookkeeping, shortenPaths, stripRtk } from '../hooks/lib/classify'
+import { classifyShell, classifyToolCall, isBookkeeping, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
 import { bar, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
-import { activityItems, fitSegments, groupRepeats, statusSegments, type Segment } from '../hooks/lib/layout'
+import { activityItems, fitSegments, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
+import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
 import { parseGitStatus, parsePrView } from '../hooks/lib/parse'
 import type { Activity } from '../types'
 
@@ -33,7 +34,7 @@ describe('classificação de comandos', () => {
 
   test('execute_sql com DROP TABLE é crítico', async () => {
     const result = classifyToolCall('mcp__claude_ai_Supabase__execute_sql', { query: 'DROP TABLE users;' })
-    expect(result).toEqual({ kind: 'critical', label: 'Supabase · execute_sql', detail: 'DROP TABLE users;' })
+    expect([result.kind, result.category, result.sql]).toEqual(['critical', 'action', 'DROP TABLE users;'])
   })
 
   test('execute_sql com SELECT é MCP', async () => {
@@ -60,6 +61,41 @@ describe('classificação de comandos', () => {
     expect(classifyToolCall('Bash', { command: 'cd ~/x && rtk git status' }).label).toBe('git status')
   })
 
+  test('Bash com descrição usa a descrição como rótulo', async () => {
+    expect(classifyToolCall('Bash', { command: 'python3 - <<EOF', description: 'Roda os testes' }).label).toBe('Roda os testes')
+  })
+
+  test('sed -i é edição', async () => {
+    expect(classifyToolCall('Bash', { command: "sed -i 's/a/b/' x.json" }).category).toBe('edit')
+  })
+
+  test('redirecionar para /dev/null não é edição', async () => {
+    expect(classifyToolCall('Bash', { command: 'ls > /dev/null' }).category).toBe('action')
+  })
+
+  test('Bash marcado como somente leitura vira leitura', async () => {
+    expect(settleCategory('action', true)).toBe('read')
+  })
+
+  test('Edit conta linhas novas e removidas', async () => {
+    expect(classifyToolCall('Edit', { file_path: '/a/b.ts', old_string: 'x', new_string: 'y\nz' }).stat).toBe('+2 −1')
+  })
+
+  test('Edit guarda um diff da troca', async () => {
+    expect(classifyToolCall('Edit', { file_path: '/a/b.ts', old_string: 'x', new_string: 'y' }).file?.diff).toBe('@@ -1,1 +1,1 @@\n-x\n+y')
+  })
+
+  test('Write guarda o conteúdo escrito', async () => {
+    expect(classifyToolCall('Write', { file_path: '/a/README.md', content: '# Oi' }).file?.content).toBe('# Oi')
+  })
+
+  test('MCP list_ é leitura e execute_sql é ação', async () => {
+    const kinds = ['mcp__claude_ai_Supabase__list_tables', 'mcp__claude_ai_Supabase__execute_sql'].map(
+      tool => classifyToolCall(tool, { query: 'select 1' }).category,
+    )
+    expect(kinds).toEqual(['read', 'action'])
+  })
+
   test('caminho longo vira as duas últimas partes', async () => {
     expect(shortenPaths('ls ~/.claude/mods/painel/hooks/lib')).toBe('ls …/hooks/lib')
   })
@@ -72,8 +108,8 @@ describe('classificação de comandos', () => {
     expect([isBookkeeping('ToolSearch'), isBookkeeping('mcp__plan-progress__plan_progress'), isBookkeeping('Bash')]).toEqual([true, true, false])
   })
 
-  test('Edit mostra só o nome do arquivo', async () => {
-    expect(classifyToolCall('Edit', { file_path: '/a/b/page.tsx' }).label).toBe('Edit page.tsx')
+  test('edição mostra só o nome do arquivo', async () => {
+    expect(classifyToolCall('Edit', { file_path: '/a/b/page.tsx' }).label).toBe('page.tsx')
   })
 })
 
@@ -187,6 +223,8 @@ describe('layout da faixa', () => {
     id,
     startedAt: 0,
     kind,
+    category: 'action',
+    groupId: 'inicio',
     label: `cmd-${id}`,
     detail: '',
     status,
@@ -262,5 +300,88 @@ test('chamada de ferramenta não aparece no chat', async ($, on) => {
     props: { tool_use_id: 't1', tool: 'Bash', input: { command: 'ls' }, isRunning: false, isErrored: false, isInterrupted: false },
   } as never)
   expect(await ui.find({ text: /ls/ })).toBe(undefined)
+  await ui.unmount()
+})
+
+describe('visualizador de MCP', () => {
+  const envelope = JSON.stringify({
+    result:
+      'Below is the result of the SQL query.\n\n<untrusted-data-09efa440-e8a5>\n[{"approved_rows":0,"oldest_approved":null}]\n</untrusted-data-09efa440-e8a5>\n\nUse this data',
+  })
+
+  test('tira o envelope do Supabase e lê as linhas', async () => {
+    expect(readMcpOutput(envelope, false)).toEqual({ kind: 'rows', rows: [{ approved_rows: 0, oldest_approved: null }] })
+  })
+
+  test('erro do MCP mostra só a mensagem', async () => {
+    expect(readMcpOutput(JSON.stringify({ error: { message: 'relation x does not exist' } }), true)).toEqual({
+      kind: 'error',
+      message: 'relation x does not exist',
+    })
+  })
+
+  test('objeto aninhado vira JSON indentado', async () => {
+    expect(readMcpOutput('{"a":{"b":1}}', false)).toEqual({ kind: 'json', text: '{\n  "a": {\n    "b": 1\n  }\n}' })
+  })
+
+  test('tabela que cabe tem uma largura por coluna', async () => {
+    expect(tableLayout([{ id: 12, nome: 'ana' }], 40)?.widths).toEqual([2, 4])
+  })
+
+  test('tabela larga demais não vira tabela', async () => {
+    expect(tableLayout([{ uma_coluna_bem_longa: 1, outra_coluna_longa: 2 }], 20)).toBe(null)
+  })
+})
+
+describe('pedidos', () => {
+  const call = (id: string, groupId: string, category: Activity['category']): Activity => ({
+    id,
+    startedAt: 0,
+    kind: 'plain',
+    category,
+    groupId,
+    label: id,
+    detail: '',
+    status: 'ok',
+  })
+
+  test('agrupa por pedido, o mais recente primeiro', async () => {
+    const views = groupByRequest(
+      [call('a', 'r1', 'edit'), call('b', 'r2', 'read')],
+      [
+        { id: 'r1', text: 'primeiro', startedAt: 0 },
+        { id: 'r2', text: 'segundo', startedAt: 1 },
+      ],
+    )
+    expect(views.map(view => view.request.id)).toEqual(['r2', 'r1'])
+  })
+
+  test('filtro de edição pega só edições', async () => {
+    expect([matchesFilter(call('a', 'r', 'edit'), 'edit'), matchesFilter(call('b', 'r', 'read'), 'edit')]).toEqual([true, false])
+  })
+})
+
+const PANE_PROPS = { bodyColumns: 60, title: 'Atividade' }
+
+test('lista mostra o resultado do Supabase como registro ao expandir', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  const envelope = JSON.stringify({
+    result: 'Below.\n<untrusted-data-abc>\n[{"approved_rows":0,"oldest_approved":null}]\n</untrusted-data-abc>\nUse.',
+  })
+  on('tool.call', () => ({ result: {}, text: envelope }))
+  await $.tool.call({ tool: 'mcp__claude_ai_Supabase__execute_sql', tool_use_id: 'sql1', project_id: 'p', query: 'select 1' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'open-sql1' })
+  expect((await ui.find({ text: /approved_rows/ })) !== undefined).toBe(true)
+  await ui.unmount()
+})
+
+test('lista mostra o markdown escrito ao expandir um Write', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('tool.call', () => ({ result: {}, text: 'File created successfully' }))
+  await $.tool.call({ tool: 'Write', tool_use_id: 'w1', file_path: '/x/NOTAS.md', content: '# Título\n\n- item' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'open-w1' })
+  expect((await ui.find({ type: 'Markdown' })) !== undefined).toBe(true)
   await ui.unmount()
 })

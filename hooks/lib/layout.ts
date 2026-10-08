@@ -1,4 +1,4 @@
-import type { Activity, ActivityFilter, GitInfo, PaneTab, PrInfo, Task, UsageInfo } from '../../types'
+import type { Activity, ActivityCategory, ActivityFilter, GitInfo, PaneTab, PrInfo, RequestGroup, Task, UsageInfo } from '../../types'
 import {
   LIMIT_WINDOWS,
   bar,
@@ -29,9 +29,28 @@ export type Segment = {
 export const KEEP = 100
 const SEGMENT_GAP = 2
 
-export const KIND_ICON: Record<Activity['kind'], string> = { critical: '⚠', mcp: '◆', cli: '⚙', plain: '·' }
+export const CATEGORY_ICON: Record<ActivityCategory, string> = { edit: '✎', action: '▶', read: '·' }
 
-const KIND_TONE: Record<Activity['kind'], Tone> = { critical: 'high', mcp: 'mcp', cli: 'cli', plain: 'dim' }
+const START_GROUP = 'inicio'
+
+/** Entradas gravadas antes da v2 não têm tipo nem pedido. */
+export function categoryOf(activity: Activity): ActivityCategory {
+  return activity.category ?? (activity.kind === 'plain' ? 'read' : 'action')
+}
+
+export function groupIdOf(activity: Activity): string {
+  return activity.groupId ?? START_GROUP
+}
+
+export function iconFor(activity: Activity): Piece {
+  if (activity.status === 'running') return { text: '◌', tone: 'warn' }
+  if (activity.status === 'error') return { text: '✗', tone: 'high' }
+  if (activity.kind === 'critical') return { text: '⚠', tone: 'high', bold: true }
+  const category = categoryOf(activity)
+  if (category === 'edit') return { text: CATEGORY_ICON.edit, tone: 'warn' }
+  if (category === 'read') return { text: CATEGORY_ICON.read, tone: 'dim' }
+  return activity.isMcp || activity.kind === 'mcp' ? { text: '◆', tone: 'mcp' } : { text: CATEGORY_ICON.action, tone: 'cli' }
+}
 
 const CHECK_GLYPH = { pass: '✓', fail: '✗', pending: '⏳' } as const
 const MAX_CHECK_GLYPHS = 5
@@ -213,11 +232,7 @@ const MIN_LABEL = 12
 
 function toItem({ activity, count }: ActivityGroup, now: number): ActivityItem {
   const isRunning = activity.status === 'running'
-  const icon: Piece = isRunning
-    ? { text: '▶', tone: 'warn' }
-    : activity.status === 'error'
-      ? { text: '✗', tone: 'high' }
-      : { text: KIND_ICON[activity.kind], tone: KIND_TONE[activity.kind], bold: activity.kind === 'critical' }
+  const icon = iconFor(activity)
   const suffixText = isRunning ? ` ${duration(now - activity.startedAt)}` : repeatSuffix(count)
   const suffix: Piece | undefined = suffixText ? { text: suffixText, tone: 'dim' } : undefined
   return { activity, icon, label: activity.label, suffix }
@@ -266,5 +281,54 @@ export function activityItems(
 }
 
 export function matchesFilter(activity: Activity, filter: ActivityFilter): boolean {
-  return filter === 'all' || activity.kind === filter
+  if (filter === 'all') return true
+  if (filter === 'critical') return activity.kind === 'critical'
+  return categoryOf(activity) === filter
+}
+
+export type CategoryCounts = Record<ActivityCategory, number>
+
+export function countCategories(list: Activity[]): CategoryCounts {
+  const counts: CategoryCounts = { edit: 0, action: 0, read: 0 }
+  for (const entry of list) counts[categoryOf(entry)] += 1
+  return counts
+}
+
+export type RequestView = { request: RequestGroup; entries: Activity[]; counts: CategoryCounts }
+
+/** Agrupa as chamadas pelo pedido em que aconteceram; o pedido mais recente vem primeiro. */
+export function groupByRequest(activity: Activity[], requests: RequestGroup[]): RequestView[] {
+  const known = new Set(requests.map(request => request.id))
+  const byGroup = new Map<string, Activity[]>()
+  for (const entry of activity) {
+    const id = known.has(groupIdOf(entry)) ? groupIdOf(entry) : START_GROUP
+    byGroup.set(id, [...(byGroup.get(id) ?? []), entry])
+  }
+  const start: RequestGroup = { id: START_GROUP, text: 'início da sessão', startedAt: activity[0]?.startedAt ?? 0 }
+  return [start, ...requests]
+    .filter(request => byGroup.has(request.id))
+    .map(request => {
+      const entries = byGroup.get(request.id)!
+      return { request, entries: [...entries].reverse(), counts: countCategories(entries) }
+    })
+    .reverse()
+}
+
+export function countsLabel(counts: CategoryCounts): string {
+  const parts = [
+    counts.edit ? `${counts.edit} ${counts.edit === 1 ? 'edição' : 'edições'}` : '',
+    counts.action ? `${counts.action} ${counts.action === 1 ? 'ação' : 'ações'}` : '',
+  ].filter(Boolean)
+  return parts.join(' · ')
+}
+
+export function readsLabel(count: number): string {
+  return count === 1 ? '1 leitura' : `${count} leituras`
+}
+
+export function sinceLabel(ms: number): string {
+  const minutes = Math.floor(ms / 60_000)
+  if (minutes < 1) return 'agora'
+  if (minutes < 60) return `${minutes}min`
+  return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}`
 }
