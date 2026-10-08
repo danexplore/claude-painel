@@ -1,0 +1,5 @@
+{
+  "name": "painel-local",
+  "owner": { "name": "daniel-moreira-batista" },
+  "plugins": [{ "name": "painel", "source": "./" }]
+}
