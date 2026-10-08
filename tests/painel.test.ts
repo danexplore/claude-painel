@@ -543,7 +543,7 @@ test('subagente aparece como bloco com as chamadas dele dentro', async ($, on) =
 })
 
 test('modo edições abre o grupo misto em linhas e esconde o grupo sem edição', async ($, on) => {
-  on('ui.render', (_$, e: { props?: { isExpanded?: boolean } }) => ({ type: 'Text' as const, props: {}, children: [`expandido:${e.props?.isExpanded}`] }) as never)
+  on('ui.render', ((_$: unknown, e: { props?: { isExpanded?: boolean } }) => ({ type: 'Text', props: {}, children: [`expandido:${e.props?.isExpanded}`] })) as never)
   const pane = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
   await pane.press({ key: 'chat-tools' })
   await pane.unmount()
