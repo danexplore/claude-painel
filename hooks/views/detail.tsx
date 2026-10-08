@@ -247,7 +247,7 @@ function request(kit: Kit, entry: Activity, options: DetailOptions): RenderNode 
     const { text, total } = limitLines(entry.sql.trim(), options)
     return (
       <Box flexDirection="column">
-        <Code source={text} language="sql" wrap={codeWrap(options)} />
+        <Code source={text} language="sql" wrap="wrap" />
         {!options.isFull && total > options.previewLines && showAllButton(kit, `${entry.id}-sql`, `query inteira · ${total} linhas`, options)}
       </Box>
     )

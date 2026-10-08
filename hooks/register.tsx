@@ -34,6 +34,8 @@ import { coloredStat, entryDetail, fileDiff } from './views/detail'
 const PANE = 'painel'
 const MAX_ACTIVITY = 200
 const MAX_OUTPUT_CHARS = 20_000
+/** Resultado de MCP (linhas de uma query) costuma ser maior e só vale inteiro. */
+const MAX_MCP_OUTPUT_CHARS = 120_000
 const GIT_EVERY_MS = 10_000
 const PR_EVERY_MS = 60_000
 const TICK_MS = 1_000
@@ -406,7 +408,7 @@ export const register: Register = on => {
         await update($, fileLog, log => mergeFileEvents(log, changes.map(change => ({ ...change, id, at: started }))))
         await learnProjectRoots($, changes.map(change => change.path))
       }
-      const output = cleanText(ran.deny ?? ran.text ?? '').slice(0, MAX_OUTPUT_CHARS)
+      const output = cleanText(ran.deny ?? ran.text ?? '').slice(0, classified.isMcp ? MAX_MCP_OUTPUT_CHARS : MAX_OUTPUT_CHARS)
       await update($, activity, list =>
         list.map(entry =>
           entry.id === id

@@ -8,7 +8,6 @@ export type McpOutput =
 
 export const MAX_ROWS = 50
 const COLUMN_GAP = 2
-const UNTRUSTED = /<untrusted-data-[\w-]+>\s*([\s\S]*?)\s*<\/untrusted-data-[\w-]+>/
 
 function parseJson(text: string): unknown {
   try {
@@ -31,16 +30,33 @@ function asRows(value: unknown): Row[] | null {
   return Array.isArray(value) && value.every(isFlatRow) ? value : null
 }
 
-const OPEN_TAG = /<untrusted-data-[\w-]+>/
+const OPEN_TAG = /<untrusted-data-[\w-]+>/g
+
+/**
+ * O aviso do Supabase cita a marcação antes de abri-la ("dentro da <untrusted-data-…> abaixo"):
+ * o dado começa na última abertura antes do fechamento, não na primeira menção.
+ */
+function lastOpenTag(text: string, before: number): { end: number } | undefined {
+  let found: { end: number } | undefined
+  for (const match of text.slice(0, before).matchAll(OPEN_TAG)) found = { end: match.index + match[0].length }
+  return found
+}
+
+function untrustedBody(text: string): string | undefined {
+  const close = text.search(/<\/untrusted-data-/)
+  if (close < 0) return undefined
+  const open = lastOpenTag(text, close)
+  return open ? text.slice(open.end, close).trim() : undefined
+}
 
 /**
  * Saída grande chega cortada e o JSON do envelope não fecha. O miolo ainda está lá, escapado
  * como string JSON: tira o envelope à mão, desfaz os escapes e tenta ler o que sobrar.
  */
 function salvageEnvelope(raw: string): unknown {
-  const open = OPEN_TAG.exec(raw)
+  const open = lastOpenTag(raw, raw.length)
   if (!open) return undefined
-  const rest = raw.slice(open.index + open[0].length)
+  const rest = raw.slice(open.end)
   const close = rest.search(/<\/untrusted-data-/)
   const escaped = (close >= 0 ? rest.slice(0, close) : rest).replace(/^(\\n|\s)+|(\\n|\s)+$/g, '')
   const inner = parseJson(`"${escaped.replace(/\\?$/, '')}"`)
@@ -52,7 +68,7 @@ function salvageEnvelope(raw: string): unknown {
 function unwrapEnvelope(value: unknown): unknown {
   const result = typeof value === 'object' && value !== null ? (value as Row)['result'] : undefined
   if (typeof result !== 'string') return value
-  const inner = UNTRUSTED.exec(result)?.[1]
+  const inner = untrustedBody(result)
   return inner === undefined ? result : (parseJson(inner) ?? inner)
 }
 

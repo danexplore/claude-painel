@@ -1,6 +1,6 @@
 {
   "name": "painel",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "author": { "name": "danexplore", "url": "https://github.com/danexplore" },
   "repository": "https://github.com/danexplore/claude-painel",
   "description": "Faixa compacta com uso, git, PR, tarefas e atividade do Claude, com painel de detalhes clicável",
