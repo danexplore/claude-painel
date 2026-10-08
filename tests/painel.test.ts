@@ -2,8 +2,9 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { classifyShell, classifyToolCall, gitNote, isBookkeeping, isReadOnlyShell, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
 import { bar, cleanText, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
-import { activityItems, fitSegments, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
+import { activityItems, categoryOf, fitSegments, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
+import { withMcpFields } from '../hooks/views/detail'
 import { filesChanged, groupByProject, homePath, mergeFileEvents, projectPath } from '../hooks/lib/files'
 import { markdownBlocks, plainInline } from '../hooks/lib/markdown'
 import { parseGitStatus, parsePrView } from '../hooks/lib/parse'
@@ -363,6 +364,16 @@ describe('visualizador de MCP', () => {
     })
   })
 
+  test('envelope cortado no meio ainda vira linhas', async () => {
+    const cut = envelope.slice(0, envelope.indexOf('</untrusted'))
+    expect(readMcpOutput(cut, false)).toEqual({ kind: 'rows', rows: [{ approved_rows: 0, oldest_approved: null }] })
+  })
+
+  test('consulta sem resultado vira lista vazia', async () => {
+    const empty = JSON.stringify({ result: 'x <untrusted-data-a1>\n[]\n</untrusted-data-a1> y' })
+    expect(readMcpOutput(empty, false)).toEqual({ kind: 'rows', rows: [] })
+  })
+
   test('objeto aninhado vira JSON indentado', async () => {
     expect(readMcpOutput('{"a":{"b":1}}', false)).toEqual({ kind: 'json', text: '{\n  "a": {\n    "b": 1\n  }\n}' })
   })
@@ -400,7 +411,7 @@ describe('pedidos', () => {
   })
 
   test('filtro de edição pega só edições', async () => {
-    expect([matchesFilter(call('a', 'r', 'edit'), 'edit'), matchesFilter(call('b', 'r', 'read'), 'edit')]).toEqual([true, false])
+    expect([matchesFilter({ ...call('a', 'r', 'edit'), stat: '+1 −0' }, 'edit'), matchesFilter(call('b', 'r', 'read'), 'edit')]).toEqual([true, false])
   })
 })
 
@@ -471,6 +482,35 @@ describe('arquivos da sessão', () => {
     const groups = groupByProject([{ path: '/r/a/x.ts' }, { path: '/r/b/y.ts' }, { path: '/r/a/z.ts' }, { path: '/tmp/w' }], ['/r/a', '/r/b'])
     expect(groups.map(group => `${group.name}:${group.files.length}`)).toEqual(['a:2', 'b:1', 'fora de projeto:1'])
   })
+})
+
+describe('edição só com mudança', () => {
+  const base: Activity = { id: 'c1', startedAt: 0, kind: 'plain', category: 'edit', groupId: 'g', label: 'python3 - <<EOF', detail: 'python3 - <<EOF', status: 'ok' }
+
+  test('comando que parecia editar e não mudou nada conta como ação', async () => {
+    expect(categoryOf(base)).toBe('action')
+  })
+
+  test('comando que mudou arquivo continua edição', async () => {
+    expect(categoryOf({ ...base, stat: '+1 −1' })).toBe('edit')
+  })
+})
+
+test('chamada antiga do Supabase é reconhecida como MCP com query', async () => {
+  const old: Activity = { id: 's1', startedAt: 1, kind: 'mcp', category: 'action', groupId: 'g', label: 'Supabase · execute_sql', detail: 'begin;\nselect 1;', status: 'ok' }
+  expect(withMcpFields(old)).toMatchObject({ isMcp: true, sql: 'begin;\nselect 1;' })
+})
+
+test('execute_sql mostra a query como SQL e o resultado sem envelope', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('tool.call', () => ({ result: {}, text: '{"result":"a <untrusted-data-z>\\n[{\\"n\\":1}]\\n</untrusted-data-z> b"}' }))
+  await $.tool.call({ tool: 'mcp__claude_ai_Supabase__execute_sql', tool_use_id: 's2', project_id: 'p', query: 'select 1 as n;' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'open-s2' })
+  const code = await ui.find({ type: 'Code' })
+  expect([JSON.stringify(code).includes('"sql"'), (await ui.find({ text: /1 linha/ })) !== undefined]).toEqual([true, true])
+  await ui.unmount()
 })
 
 test('aba Arquivos lista o arquivo editado e mostra o diff ao abrir', async ($, on) => {

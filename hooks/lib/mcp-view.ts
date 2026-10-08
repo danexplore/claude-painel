@@ -28,7 +28,24 @@ function isFlatRow(value: unknown): value is Row {
 }
 
 function asRows(value: unknown): Row[] | null {
-  return Array.isArray(value) && value.length > 0 && value.every(isFlatRow) ? value : null
+  return Array.isArray(value) && value.every(isFlatRow) ? value : null
+}
+
+const OPEN_TAG = /<untrusted-data-[\w-]+>/
+
+/**
+ * Saída grande chega cortada e o JSON do envelope não fecha. O miolo ainda está lá, escapado
+ * como string JSON: tira o envelope à mão, desfaz os escapes e tenta ler o que sobrar.
+ */
+function salvageEnvelope(raw: string): unknown {
+  const open = OPEN_TAG.exec(raw)
+  if (!open) return undefined
+  const rest = raw.slice(open.index + open[0].length)
+  const close = rest.search(/<\/untrusted-data-/)
+  const escaped = (close >= 0 ? rest.slice(0, close) : rest).replace(/^(\\n|\s)+|(\\n|\s)+$/g, '')
+  const inner = parseJson(`"${escaped.replace(/\\?$/, '')}"`)
+  const text = typeof inner === 'string' ? inner : escaped.replace(/\\n/g, '\n').replace(/\\"/g, '"')
+  return parseJson(text) ?? text
 }
 
 /** O Supabase embrulha o resultado num aviso; o que interessa está entre as tags `untrusted-data`. */
@@ -50,7 +67,7 @@ function errorMessage(value: unknown): string | null {
 }
 
 export function readMcpOutput(output: string, isError: boolean): McpOutput {
-  const parsed = parseJson(output.trim())
+  const parsed = parseJson(output.trim()) ?? salvageEnvelope(output)
   if (parsed === undefined) return isError ? { kind: 'error', message: output } : { kind: 'text', text: output }
   const message = errorMessage(parsed)
   if (message !== null) return { kind: 'error', message }
@@ -92,7 +109,7 @@ export function recordKeyWidth(rows: Row[]): number {
 }
 
 export function rowCountLabel(count: number): string {
-  return count === 1 ? '1 linha' : `${count} linhas`
+  return count === 0 ? 'nenhuma linha' : count === 1 ? '1 linha' : `${count} linhas`
 }
 
 export { COLUMN_GAP }

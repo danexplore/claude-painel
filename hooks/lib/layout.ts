@@ -35,9 +35,18 @@ export const CATEGORY_ICON: Record<ActivityCategory, string> = { edit: '✎', ac
 
 const START_GROUP = 'inicio'
 
-/** Entradas gravadas antes da v2 não têm tipo nem pedido. */
+function changedSomething(activity: Activity): boolean {
+  return activity.file !== undefined || (activity.files?.length ?? 0) > 0 || activity.stat !== undefined
+}
+
+/**
+ * Entradas gravadas antes da v2 não têm tipo nem pedido. Edição é só o que mudou arquivo (tem `+N −M`):
+ * um comando que parecia editar (heredoc, `python -`) e terminou sem mudar nada conta como ação.
+ */
 export function categoryOf(activity: Activity): ActivityCategory {
-  return activity.category ?? (activity.kind === 'plain' ? 'read' : 'action')
+  const category = activity.category ?? (activity.kind === 'plain' ? 'read' : 'action')
+  if (category === 'edit' && activity.status !== 'running' && !changedSomething(activity)) return 'action'
+  return category
 }
 
 export function groupIdOf(activity: Activity): string {

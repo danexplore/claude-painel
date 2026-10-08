@@ -163,8 +163,8 @@ function mcpOutput(kit: Kit, entry: Activity, options: DetailOptions): RenderNod
     const shown = options.isFull ? parsed.rows : parsed.rows.slice(0, MAX_ROWS)
     return (
       <Box flexDirection="column">
-        <Text dimColor>{rowCountLabel(parsed.rows.length)}</Text>
-        {rowsTable(kit, entry.id, shown, options.width)}
+        <Text dimColor>{TREE}{rowCountLabel(parsed.rows.length)}</Text>
+        {shown.length > 0 && rowsTable(kit, entry.id, shown, options.width)}
         {shown.length < parsed.rows.length && showAllButton(kit, entry.id, `mostrar mais · ${parsed.rows.length - shown.length}`, options)}
       </Box>
     )
@@ -242,8 +242,16 @@ function commandLine(kit: Kit, entry: Activity, options: DetailOptions): RenderN
 }
 
 function request(kit: Kit, entry: Activity, options: DetailOptions): RenderNode {
-  const { Code } = kit
-  if (entry.sql) return <Code source={entry.sql.trim()} language="sql" wrap="wrap" />
+  const { Box, Code } = kit
+  if (entry.sql) {
+    const { text, total } = limitLines(entry.sql.trim(), options)
+    return (
+      <Box flexDirection="column">
+        <Code source={text} language="sql" wrap={codeWrap(options)} />
+        {!options.isFull && total > options.previewLines && showAllButton(kit, `${entry.id}-sql`, `query inteira · ${total} linhas`, options)}
+      </Box>
+    )
+  }
   if (entry.isMcp) return <Code source={limitLines(entry.detail, { ...options, isFull: false }).text} language="json" wrap="wrap" />
   return commandLine(kit, entry, options)
 }
@@ -256,7 +264,19 @@ function cleanChange(change: FileChange): FileChange {
   }
 }
 
-function cleanEntry(entry: Activity): Activity {
+const MCP_LABEL = /^\S.* · [\w-]+$/
+const SQL_TOOLS = /· (execute_sql|apply_migration)$/
+
+/** Chamadas gravadas antes da v0.6 não marcavam MCP nem guardavam a query à parte; deduz pelo rótulo. */
+export function withMcpFields(entry: Activity): Activity {
+  const isMcp = entry.isMcp ?? (entry.tool?.startsWith('mcp__') || ((entry.kind === 'mcp' || entry.kind === 'critical') && MCP_LABEL.test(entry.label)))
+  if (!isMcp) return entry
+  const sql = entry.sql ?? (SQL_TOOLS.test(entry.label) && !entry.detail.trimStart().startsWith('{') ? entry.detail : undefined)
+  return { ...entry, isMcp: true, ...(sql !== undefined ? { sql } : {}) }
+}
+
+function cleanEntry(rawEntry: Activity): Activity {
+  const entry = withMcpFields(rawEntry)
   return {
     ...entry,
     detail: cleanText(entry.detail),

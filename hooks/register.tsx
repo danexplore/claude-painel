@@ -548,6 +548,7 @@ export const register: Register = on => {
     )
     const filters = (
       <Box gap={2}>
+        {filterButton('all', list.length)}
         {filterButton('edit', counts.edit)}
         {filterButton('action', counts.action)}
         <Button
