@@ -71,6 +71,7 @@ declare module 'claude-code' {
       paneMode: PaneMode
       sideListShown: boolean
       sideListDismissed: boolean
+      toolsInChat: boolean
     }
   }
 }

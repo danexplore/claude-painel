@@ -47,6 +47,7 @@ const showFullOutput = atom({ plugin: 'painel', key: 'showFullOutput' } as const
 const paneMode = atom({ plugin: 'painel', key: 'paneMode' } as const, 'compact' as PaneMode)
 const sideListShown = atom({ plugin: 'painel', key: 'sideListShown' } as const, false)
 const sideListDismissed = atom({ plugin: 'painel', key: 'sideListDismissed' } as const, false)
+const toolsInChat = atom({ plugin: 'painel', key: 'toolsInChat' } as const, false)
 
 const TONE_STYLE: Record<Tone, { color?: string; dimColor?: boolean }> = {
   normal: {},
@@ -275,6 +276,31 @@ export const register: Register = on => {
     return ran
   }).catch(($, e, next) => next(e))
 
+  // As chamadas de ferramenta saem da conversa: ficam só na lista lateral, e a tecla t as traz de volta.
+  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
+    if (await read($, toolsInChat)) return next(e)
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
+
+  on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
+    if (await read($, toolsInChat)) return next(e)
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
+
+  on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
+    if (e.props.isExpanded || (await read($, toolsInChat))) return next(e)
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
+
+  on('ui.render', { component: 'ToolProgress' }, async ($, e, next) => {
+    if (await read($, toolsInChat)) return next(e)
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
@@ -369,6 +395,7 @@ export const register: Register = on => {
     const rule = <Text dimColor>{'─'.repeat(width)}</Text>
 
     if ((await read($, paneMode)) === 'compact') {
+      const isToolsInChat = await read($, toolsInChat)
       const openTasks = taskList.filter(task => task.status !== 'completed')
       const doneTasks = taskList.length - openTasks.length
       const shownTasks = openTasks.slice(0, COMPACT_TASKS)
@@ -397,7 +424,17 @@ export const register: Register = on => {
         <Box flexDirection="column">
           <Box justifyContent="space-between">
             <Text bold>Atividade</Text>
-            <Button key="expand" plain hotkey="a" label="abrir" onPress={() => void openPane($, { tab: 'activity' })} />
+            <Box gap={2}>
+              <Button
+                key="tools-in-chat"
+                plain
+                hotkey="t"
+                dimColor
+                label={isToolsInChat ? 'tirar do chat' : 'ver no chat'}
+                onPress={() => void update($, toolsInChat, shown => !shown)}
+              />
+              <Button key="expand" plain hotkey="a" label="abrir" onPress={() => void openPane($, { tab: 'activity' })} />
+            </Box>
           </Box>
           <Box gap={2}>{(['all', 'critical', 'mcp', 'cli'] as const).map(filterButton)}</Box>
           <Text dimColor>· comum  ✗ erro  ▶ rodando  ×N repetido</Text>

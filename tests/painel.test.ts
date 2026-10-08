@@ -252,3 +252,15 @@ test('lista lateral mostra repetidos agrupados', async ($, on) => {
   expect((await ui.find({ text: /×2/ })) !== undefined).toBe(true)
   await ui.unmount()
 })
+
+test('chamada de ferramenta não aparece no chat', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  const ui = await $.ui.mount({
+    plugin: 'painel',
+    surface: 'terminal',
+    component: 'ToolUse',
+    props: { tool_use_id: 't1', tool: 'Bash', input: { command: 'ls' }, isRunning: false, isErrored: false, isInterrupted: false },
+  } as never)
+  expect(await ui.find({ text: /ls/ })).toBe(undefined)
+  await ui.unmount()
+})
