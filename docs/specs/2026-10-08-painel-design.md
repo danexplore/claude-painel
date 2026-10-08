@@ -41,7 +41,7 @@ Sem dados → segmento oculto (fora de repo git, sem upstream, sem PR, `gh` ause
 - À esquerda, se houver tool call em andamento: spinner + comando + tempo correndo.
 - Depois, os últimos itens concluídos (mais novo primeiro) até caber, separados por ` · `, apagados; críticos em vermelho/negrito com `⚠`; falhas com `✗` vermelho.
 - Críticos não vistos ficam **fixados** logo após o item em andamento até o painel de atividade ser aberto.
-- `[atividade]` no fim da linha (Button, hotkey `a`). Clicar em qualquer item também abre o painel com aquele item expandido.
+- `[atividade]` no fim da linha (Button, hotkey `a`). Clicar em qualquer item também abre o painel com aquele item expandido. A doc de mods só fala em "press": o primeiro passo do plano confirma se `Button` aceita clique no fullscreen; se não aceitar, ficam os atalhos (`a`, e dígitos na band).
 
 ### Tela estreita
 
