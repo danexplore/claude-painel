@@ -67,6 +67,30 @@ export function classifyShell(command: string): ActivityKind {
   return segments.some(segment => classifyShellSegment(segment) === 'cli') ? 'cli' : 'plain'
 }
 
+const READ_PROGRAMS = new Set([
+  'cd', 'ls', 'cat', 'grep', 'rg', 'egrep', 'head', 'tail', 'wc', 'awk', 'cut', 'sort', 'uniq', 'tr', 'jq', 'pwd',
+  'echo', 'printf', 'which', 'whereis', 'type', 'file', 'stat', 'du', 'df', 'tree', 'less', 'diff', 'basename',
+  'dirname', 'realpath', 'readlink', 'date', 'env', 'printenv', 'id', 'whoami', 'uname', 'test', '[', 'true', 'nl',
+])
+const GIT_READ = new Set(['status', 'log', 'diff', 'show', 'branch', 'remote', 'rev-parse', 'ls-files', 'blame', 'worktree', 'describe', 'tag'])
+const WRITES_TO_FILE = /(?:^|[^>&2])>>?\s*(?!\/dev\/null|&)[\w~./"'-]/
+
+function isReadSegment(segment: string): boolean {
+  const [program = '', verb = ''] = segment.split(/\s+/)
+  if (program === 'sed') return !/(?:^|\s)-[a-z]*i/.test(segment)
+  if (program === 'find') return !/\s-(?:delete|exec|execdir|ok)\b/.test(segment)
+  if (program === 'git') return GIT_READ.has(verb)
+  return READ_PROGRAMS.has(program)
+}
+
+/** Só leitura quando cada parte da chain é um programa que apenas consulta e nada é redirecionado para arquivo. */
+export function isReadOnlyShell(command: string): boolean {
+  const clean = stripRtk(command)
+  if (WRITES_TO_FILE.test(clean) || /<<|\btee\b/.test(clean)) return false
+  const segments = splitShellChain(clean.replace(/\d?>&\d|2>\/dev\/null|>\s*\/dev\/null/g, ''))
+  return segments.length > 0 && segments.every(isReadSegment)
+}
+
 const LEADING_CD = /^\s*cd\s+(?:"[^"]*"|'[^']*'|\S+)\s*&&\s*/
 
 const LONG_PATH = /(?:~|\.{1,2})?\/(?:[^\s'"\/]+\/){2,}[^\s'"\/]*/g
@@ -236,7 +260,7 @@ export function classifyToolCall(tool: string, input: Record<string, unknown>): 
     const clean = stripRtk(command)
     return {
       kind: classifyShell(command),
-      category: SHELL_EDIT.some(rule => rule.test(clean)) ? 'edit' : 'action',
+      category: SHELL_EDIT.some(rule => rule.test(clean)) ? 'edit' : isReadOnlyShell(command) ? 'read' : 'action',
       label: description ? oneLine(description) : shellLabel(command),
       detail: command,
     }

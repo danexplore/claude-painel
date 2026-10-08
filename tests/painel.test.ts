@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { classifyShell, classifyToolCall, gitNote, isBookkeeping, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
+import { classifyShell, classifyToolCall, gitNote, isBookkeeping, isReadOnlyShell, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
 import { bar, cleanText, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
 import { activityItems, fitSegments, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
@@ -71,7 +71,27 @@ describe('classificação de comandos', () => {
   })
 
   test('redirecionar para /dev/null não é edição', async () => {
-    expect(classifyToolCall('Bash', { command: 'ls > /dev/null' }).category).toBe('action')
+    expect(classifyToolCall('Bash', { command: 'ls > /dev/null' }).category).not.toBe('edit')
+  })
+
+  test('cd e grep numa chain é leitura', async () => {
+    expect(classifyToolCall('Bash', { command: 'cd ~/x && rtk grep -n "stat" a.tsx b.tsx' }).category).toBe('read')
+  })
+
+  test('sed -n é leitura e sed -i não', async () => {
+    expect([isReadOnlyShell('sed -n 1,20p a.ts'), isReadOnlyShell("sed -i 's/a/b/' a.ts")]).toEqual([true, false])
+  })
+
+  test('git log é leitura e git commit não', async () => {
+    expect([isReadOnlyShell('git log --oneline | head'), isReadOnlyShell('git commit -m x')]).toEqual([true, false])
+  })
+
+  test('grep com saída descartada continua leitura', async () => {
+    expect(isReadOnlyShell('grep -r x . 2>/dev/null | head -5')).toBe(true)
+  })
+
+  test('heredoc não é leitura', async () => {
+    expect(isReadOnlyShell("cat <<'EOF' > a.txt")).toBe(false)
   })
 
   test('Bash marcado como somente leitura vira leitura', async () => {
