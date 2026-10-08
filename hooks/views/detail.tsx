@@ -2,7 +2,7 @@ import type { Elements, RenderNode } from 'claude-code'
 
 import type { Activity, FileChange } from '../../types'
 import { changesOf, diffCounts, homePath } from '../lib/files'
-import { truncate } from '../lib/format'
+import { cleanText, truncate } from '../lib/format'
 import {
   COLUMN_GAP,
   MAX_ROWS,
@@ -130,8 +130,9 @@ function mcpOutput(kit: Kit, entry: Activity, options: DetailOptions): RenderNod
   )
 }
 
-export function fileDiff(kit: Kit, id: string, file: FileChange, options: DetailOptions): RenderNode {
+export function fileDiff(kit: Kit, id: string, change: FileChange, options: DetailOptions): RenderNode {
   const { Box, Text, Code, Markdown } = kit
+  const file = cleanChange(change)
   const isMarkdown = /\.(?:md|mdx|markdown)$/i.test(file.path)
   const { text, total } = file.diff !== undefined ? limitHunks(file.diff, options) : limitLines(file.content ?? '', options)
   const counts = file.diff !== undefined ? diffCounts(file.diff) : undefined
@@ -198,8 +199,26 @@ function request(kit: Kit, entry: Activity, options: DetailOptions): RenderNode 
   return commandLine(kit, entry, options)
 }
 
+function cleanChange(change: FileChange): FileChange {
+  return {
+    path: cleanText(change.path),
+    ...(change.diff !== undefined ? { diff: cleanText(change.diff) } : {}),
+    ...(change.content !== undefined ? { content: cleanText(change.content) } : {}),
+  }
+}
+
+function cleanEntry(entry: Activity): Activity {
+  return {
+    ...entry,
+    detail: cleanText(entry.detail),
+    ...(entry.output !== undefined ? { output: cleanText(entry.output) } : {}),
+    ...(entry.sql !== undefined ? { sql: cleanText(entry.sql) } : {}),
+  }
+}
+
 /** O que aparece ao expandir uma chamada: o pedido (query, comando, argumentos) e a resposta. */
-export function entryDetail(kit: Kit, entry: Activity, options: DetailOptions): RenderNode {
+export function entryDetail(kit: Kit, rawEntry: Activity, options: DetailOptions): RenderNode {
+  const entry = cleanEntry(rawEntry)
   const { Box, Text } = kit
   const files = changesOf(entry).filter(file => !options.onlyPath || file.path === options.onlyPath)
   if (entry.file) {

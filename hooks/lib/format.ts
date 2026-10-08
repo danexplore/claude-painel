@@ -72,3 +72,11 @@ export function clockTime(epochMs: number): string {
   const date = new Date(epochMs)
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
+
+const ANSI = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])/g
+const CONTROL = /[\x00-\x08\x0b-\x1f\x7f]/g
+
+/** O Claude Code recusa texto com caractere de controle; tira cores de terminal, \r e o resto, mantém \n e \t. */
+export function cleanText(text: string): string {
+  return text.replace(ANSI, '').replace(/\r\n?/g, '\n').replace(CONTROL, '')
+}

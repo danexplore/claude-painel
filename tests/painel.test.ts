@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { classifyShell, classifyToolCall, gitNote, isBookkeeping, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
-import { bar, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
+import { bar, cleanText, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
 import { activityItems, fitSegments, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
 import { filesChanged, homePath, mergeFileEvents } from '../hooks/lib/files'
@@ -141,6 +141,10 @@ describe('formatação', () => {
 
   test('duração com largura curta', async () => {
     expect([duration(400), duration(12_300), duration(125_000)]).toEqual(['0.4s', '12s', '2m05'])
+  })
+
+  test('tira cores de terminal e \\r, mantém quebra de linha', async () => {
+    expect(cleanText('\x1b[31m1 fail\x1b[0m\r\nok\x07')).toBe('1 fail\nok')
   })
 
   test('truncate usa reticências', async () => {
@@ -473,5 +477,15 @@ test('Bash que muda arquivo vira edição e mostra o diff do arquivo', async ($,
   await ui.press({ key: 'open-b1' })
   const code = await ui.find({ type: 'Code' })
   expect(JSON.stringify(code)).toContain('@@ -3,1 +3,1 @@')
+  await ui.unmount()
+})
+
+test('saída colorida de terminal abre sem quebrar o painel', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('tool.call', () => ({ result: { stdout: '', stderr: '', interrupted: false }, text: '\x1b[31m 1 fail\x1b[0m\r\n\x1b[7m42\x1b[0m' }))
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'c1', command: 'npx tsc', description: 'Checa tipos' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'open-c1' })
+  expect((await ui.find({ text: /1 fail/ })) !== undefined).toBe(true)
   await ui.unmount()
 })

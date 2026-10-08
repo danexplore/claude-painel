@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Activity, ActivityFilter, FileEvent, GitInfo, PaneMode, PaneTab, PrInfo, RequestGroup, Task, TaskStatus, UsageInfo } from '../types'
 import { changesFromResult, classifyToolCall, gitNote, isBookkeeping, settleCategory, type GitOperation } from './lib/classify'
-import { clockTime, duration, truncate } from './lib/format'
+import { cleanText, clockTime, duration, truncate } from './lib/format'
 import {
   activityItems,
   categoryOf,
@@ -307,7 +307,7 @@ export const register: Register = on => {
       if (changes.length > 0) {
         await update($, fileLog, log => mergeFileEvents(log, changes.map(change => ({ ...change, id, at: started }))))
       }
-      const output = (ran.deny ?? ran.text ?? '').slice(0, MAX_OUTPUT_CHARS)
+      const output = cleanText(ran.deny ?? ran.text ?? '').slice(0, MAX_OUTPUT_CHARS)
       await update($, activity, list =>
         list.map(entry =>
           entry.id === id
@@ -455,7 +455,9 @@ export const register: Register = on => {
     )
   })
 
+  // Um erro no desenho deixaria o painel em branco; aqui ele aparece na tela, com o que falhou.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    try {
     const { Box, Text, Button, Code, Markdown } = $.ui.resolve(e)
     const kit = { Box, Text, Button, Code, Markdown }
     const width = Math.max(30, e.props.bodyColumns - 1)
@@ -502,7 +504,7 @@ export const register: Register = on => {
               key={`open-${entry.id}`}
               plain
               dimColor={categoryOf(entry) === 'read' && entry.status !== 'error' && !isOpen ? true : undefined}
-              label={truncate(entry.label, Math.max(4, labelRoom - tail.length))}
+              label={truncate(cleanText(entry.label), Math.max(4, labelRoom - tail.length))}
               onPress={() => toggleExpanded(entry.id)}
             />
             {tail && <Text dimColor>{tail}</Text>}
@@ -743,5 +745,17 @@ export const register: Register = on => {
         })}
       </Box>
     )
+    } catch (error) {
+      const { Box, Text } = $.ui.resolve(e)
+      const message = error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error)
+      return (
+        <Box flexDirection="column">
+          <Text color="error" bold>
+            painel: o desenho falhou
+          </Text>
+          <Text color="error">{message.slice(0, 2000)}</Text>
+        </Box>
+      )
+    }
   })
 }
