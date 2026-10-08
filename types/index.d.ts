@@ -52,6 +52,8 @@ export type ActivityFilter = 'all' | 'critical' | 'mcp' | 'cli'
 
 export type PaneMode = 'compact' | 'full'
 
+export type Thumbnail = { n: number; columns: number; rows: number; cells: string | null }
+
 declare module 'claude-code' {
   interface PluginState {
     painel: {
@@ -72,6 +74,7 @@ declare module 'claude-code' {
       sideListShown: boolean
       sideListDismissed: boolean
       toolsInChat: boolean
+      thumbnails: Thumbnail[]
     }
   }
 }

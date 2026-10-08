@@ -4,6 +4,7 @@ import { classifyShell, classifyToolCall, isBookkeeping, shortenPaths, stripRtk 
 import { bar, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
 import { activityItems, fitSegments, groupRepeats, statusSegments, type Segment } from '../hooks/lib/layout'
 import { parseGitStatus, parsePrView } from '../hooks/lib/parse'
+import { imageNumbers, ppmToCells, tileSize, toBase64 } from '../hooks/lib/thumbnail'
 import type { Activity } from '../types'
 
 describe('classificação de comandos', () => {
@@ -263,4 +264,31 @@ test('chamada de ferramenta não aparece no chat', async ($, on) => {
   } as never)
   expect(await ui.find({ text: /ls/ })).toBe(undefined)
   await ui.unmount()
+})
+
+describe('preview de imagem', () => {
+  test('acha as tags de imagem do rascunho, sem repetir', async () => {
+    expect(imageNumbers('olha [Image #2] e [Image #5] e [Image #2]')).toEqual([2, 5])
+  })
+
+  test('imagem larga ocupa a largura máxima e fica baixa', async () => {
+    expect(tileSize(1920, 300)).toEqual({ columns: 48, rows: 4 })
+  })
+
+  test('imagem quadrada tem o dobro de colunas que linhas', async () => {
+    expect(tileSize(100, 100)).toEqual({ columns: 16, rows: 8 })
+  })
+
+  test('base64 igual ao padrão', async () => {
+    expect(toBase64(new Uint8Array([104, 105, 33, 63]))).toBe('aGkhPw==')
+  })
+
+  test('um pixel vermelho em cima e azul embaixo vira ▀ vermelho sobre azul', async () => {
+    const cells = ppmToCells('P3\n1 2\n255\n255 0 0\n0 0 255\n', 1, 1)
+    expect(cells).toBe(toBase64(new Uint8Array(Uint32Array.of(0x2580, 0xff0000, 0x0000ff).buffer)))
+  })
+
+  test('PPM do tamanho errado não vira célula', async () => {
+    expect(ppmToCells('P3\n2 2\n255\n0 0 0 0 0 0 0 0 0 0 0 0\n', 1, 1)).toBe(null)
+  })
 })
