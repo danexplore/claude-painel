@@ -489,3 +489,23 @@ test('saída colorida de terminal abre sem quebrar o painel', async ($, on) => {
   expect((await ui.find({ text: /1 fail/ })) !== undefined).toBe(true)
   await ui.unmount()
 })
+
+test('na lista estreita o arquivo mudado aparece com caminho curto', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('tool.call', () => ({
+    result: {
+      stdout: 'ok',
+      stderr: '',
+      interrupted: false,
+      bashEditDiff: {
+        files: [{ filePath: '/home/eu/.claude/mods/painel/.claude-plugin/plugin.json', hunks: [{ oldStart: 3, oldLines: 1, newStart: 3, newLines: 1, lines: ['-a', '+b'] }] }],
+      },
+    },
+    text: 'ok',
+  }))
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'n1', command: 'sed -i s/a/b/ plugin.json', description: 'Sobe a versão' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'open-n1' })
+  expect((await ui.find({ text: /…\/\.claude-plugin\/plugin\.json/ })) !== undefined).toBe(true)
+  await ui.unmount()
+})

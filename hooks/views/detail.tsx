@@ -25,9 +25,29 @@ export type DetailOptions = {
   /** Na aba Arquivos: mostra só a troca deste arquivo, mesmo que o comando tenha mudado vários. */
   onlyPath?: string
   home?: string
+  /** Lista lateral: linhas cortadas com … em vez de quebrar, caminhos curtos. */
+  isNarrow?: boolean
+}
+
+function codeWrap(options: DetailOptions): 'wrap' | 'truncate-end' {
+  return options.isNarrow && !options.isFull ? 'truncate-end' : 'wrap'
+}
+
+function textWrap(options: DetailOptions): 'wrap' | 'truncate-end' {
+  return options.isNarrow && !options.isFull ? 'truncate-end' : 'wrap'
+}
+
+/** Na lista estreita, as duas últimas partes do caminho bastam: `…/.claude-plugin/plugin.json`. */
+function displayPath(path: string, options: DetailOptions): string {
+  const shown = homePath(path, options.home)
+  if (!options.isNarrow) return shown
+  const parts = shown.split('/').filter(Boolean)
+  return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : shown
 }
 
 const TREE = '⎿ '
+/** Quando o comando mudou arquivos, o diff é o que importa; a saída fica em poucas linhas. */
+const CHANGED_OUTPUT_LINES = 3
 
 const GAP = ' '.repeat(COLUMN_GAP)
 
@@ -124,7 +144,7 @@ function mcpOutput(kit: Kit, entry: Activity, options: DetailOptions): RenderNod
   const { text, total } = limitLines(parsed.text, options)
   return (
     <Box flexDirection="column">
-      {parsed.kind === 'json' ? <Code source={text} language="json" wrap="wrap" /> : <Text>{text}</Text>}
+      {parsed.kind === 'json' ? <Code source={text} language="json" wrap={codeWrap(options)} /> : <Text wrap={textWrap(options)}>{text}</Text>}
       {!options.isFull && total > options.previewLines && showAllButton(kit, entry.id, `ver tudo · ${total} linhas`, options)}
     </Box>
   )
@@ -140,19 +160,19 @@ export function fileDiff(kit: Kit, id: string, change: FileChange, options: Deta
   const stat = counts ? `(+${counts.added} −${counts.removed})` : `(${total} linhas)`
   return (
     <Box key={`${id}-${file.path}`} flexDirection="column">
-      <Box>
+      <Text wrap="truncate-end">
         <Text dimColor>{TREE}</Text>
         <Text>{verb} </Text>
-        <Text bold>{homePath(file.path, options.home)}</Text>
+        <Text bold>{displayPath(file.path, options)}</Text>
         <Text dimColor> {stat}</Text>
-      </Box>
+      </Text>
       <Box flexDirection="column" paddingLeft={2}>
         {file.diff !== undefined ? (
-          <Code source={text} format="diff" path={file.path} wrap="wrap" />
+          <Code source={text} format="diff" path={file.path} wrap={codeWrap(options)} />
         ) : isMarkdown ? (
           <Markdown text={text} />
         ) : (
-          <Code source={text} path={file.path} wrap="wrap" />
+          <Code source={text} path={file.path} wrap={codeWrap(options)} />
         )}
         {!options.isFull && total > options.previewLines && showAllButton(kit, `${id}-${file.path}`, `… +${total - options.previewLines} linhas · ver tudo`, options)}
       </Box>
@@ -173,7 +193,7 @@ function treeOutput(kit: Kit, entry: Activity, options: DetailOptions): RenderNo
       {lines.map((line, index) => (
         <Box key={`${entry.id}-out-${index}`}>
           <Text dimColor>{index === 0 ? TREE : '  '}</Text>
-          <Text color={isError ? 'error' : undefined} dimColor={!isError}>
+          <Text color={isError ? 'error' : undefined} dimColor={!isError} wrap={textWrap(options)}>
             {line}
           </Text>
         </Box>
@@ -232,8 +252,8 @@ export function entryDetail(kit: Kit, rawEntry: Activity, options: DetailOptions
   return (
     <Box key={`${entry.id}-detail`} flexDirection="column" paddingBottom={1}>
       {request(kit, entry, options)}
-      {entry.isMcp ? mcpOutput(kit, entry, options) : treeOutput(kit, entry, options)}
       {files.map(file => fileDiff(kit, entry.id, file, options))}
+      {entry.isMcp ? mcpOutput(kit, entry, options) : treeOutput(kit, entry, files.length > 0 ? { ...options, previewLines: Math.min(options.previewLines, CHANGED_OUTPUT_LINES) } : options)}
     </Box>
   )
 }

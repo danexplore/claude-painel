@@ -484,6 +484,7 @@ export const register: Register = on => {
         previewLines: isCompact ? COMPACT_PREVIEW_LINES : OUTPUT_PREVIEW_LINES,
         isFull: isFullOutput,
         home: homeDir,
+        isNarrow: isCompact,
         onShowAll: () =>
           void (isCompact ? openPane($, { tab: 'activity', expand: entry.id }) : update($, showFullOutput, () => true)),
       })
