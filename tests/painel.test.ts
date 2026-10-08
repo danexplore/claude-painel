@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { classifyShell, classifyToolCall, gitNote, isBookkeeping, isReadOnlyShell, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
+import { agentIdFromOutput, classifyShell, classifyToolCall, gitNote, isBookkeeping, isReadOnlyShell, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
 import { bar, cleanText, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
 import { activityItems, arrangeWithAgents, categoryOf, currentWork, fitSegments, workLabel, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
@@ -526,6 +526,22 @@ test('chamada feita por subagente aparece na lista', async ($, on) => {
   await $.tool.call({ tool: 'Bash', tool_use_id: 'b9', command: 'npm test', description: 'Roda os testes', agentId: 'ag9' } as never)
   const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
   expect((await ui.find({ text: /Roda os testes/ })) !== undefined).toBe(true)
+  await ui.unmount()
+})
+
+test('id do subagente sai do texto da chamada Agent', async () => {
+  expect(agentIdFromOutput('Async agent launched successfully.\nagentId: ad6ff8e3 (internal ID)')).toBe('ad6ff8e3')
+})
+
+test('chamada Agent em segundo plano liga o subagente sem o agent.spawn', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('tool.call', (_$: unknown, e: { tool: string }) => ({ result: {}, text: e.tool === 'Agent' ? 'Async agent launched.\nagentId: bg1 (internal)' : 'ok' }) as never)
+  await $.tool.call({ tool: 'Agent', tool_use_id: 'call-bg', description: 'Teste em segundo plano', subagent_type: 'general-purpose', prompt: 'x' } as never)
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'b-bg', command: 'sleep 1', description: 'Espera no agente', agentId: 'bg1' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  const found = [await ui.find({ text: /general-purpose · Teste em segundo plano/ }), await ui.find({ text: /Espera no agente/ })]
+  expect(found.map(node => node !== undefined)).toEqual([true, true])
   await ui.unmount()
 })
 

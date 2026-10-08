@@ -107,7 +107,7 @@ export function shellLabel(command: string): string {
   return shortenPaths(oneLine(stripRtk(command).replace(LEADING_CD, '')))
 }
 
-const BOOKKEEPING_TOOLS = new Set(['ToolSearch', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])
+const BOOKKEEPING_TOOLS = new Set(['ToolSearch', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'SubagentHandback'])
 
 /** Chamadas de bastidor do próprio Claude, que não dizem nada sobre o trabalho em si. */
 export function isBookkeeping(tool: string): boolean {
@@ -299,4 +299,11 @@ export function classifyToolCall(tool: string, input: Record<string, unknown>): 
     ...(stat ? { stat } : {}),
     ...(file ? { file } : {}),
   }
+}
+
+const AGENT_ID_IN_OUTPUT = /agentId:\s*([\w-]+)/
+
+/** A ferramenta Agent devolve o id do subagente no texto (`agentId: …`), mesmo quando roda em segundo plano. */
+export function agentIdFromOutput(output: string): string | undefined {
+  return AGENT_ID_IN_OUTPUT.exec(output)?.[1]
 }

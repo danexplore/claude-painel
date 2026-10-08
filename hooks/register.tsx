@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Activity, ActivityFilter, FileEvent, GitInfo, ChatTools, PaneTab, PrInfo, RequestGroup, SubAgent, Task, TaskStatus, UsageInfo } from '../types'
-import { changesFromResult, classifyToolCall, gitNote, isBookkeeping, settleCategory, type GitOperation } from './lib/classify'
+import { agentIdFromOutput, changesFromResult, classifyToolCall, gitNote, isBookkeeping, settleCategory, type GitOperation } from './lib/classify'
 import { cleanText, clockTime, duration, truncate } from './lib/format'
 import {
   activityItems,
@@ -64,6 +64,7 @@ const chatTools = atom({ plugin: 'painel', key: 'chatTools' } as const, 'none' a
 const CHAT_TOOLS_NEXT: Record<ChatTools, ChatTools> = { none: 'edits', edits: 'all', all: 'none' }
 const CHAT_TOOLS_LABEL: Record<ChatTools, string> = { none: 'chat: nada', edits: 'chat: edições', all: 'chat: tudo' }
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+const AGENT_TOOLS = new Set(['Agent', 'Task'])
 
 /** O que aparece na conversa: nada, só as edições de arquivo, ou tudo como o Claude Code mostra. */
 async function showsInChat($: Engine, tools: string[]): Promise<boolean> {
@@ -184,6 +185,31 @@ async function ensureSideList($: Engine): Promise<void> {
     return
   }
   await openSideList($)
+}
+
+type AgentCall = { id: string; started: number; input: Record<string, unknown>; output: string }
+
+/**
+ * Liga a chamada Agent ao subagente mesmo que o agent.spawn não tenha passado por aqui
+ * (mod recarregado, versão do engine): o id vem no texto devolvido pela ferramenta.
+ */
+async function linkAgentCall($: Engine, call: AgentCall): Promise<void> {
+  const agentId = agentIdFromOutput(call.output)
+  if (!agentId) return
+  const text = (key: string) => (typeof call.input[key] === 'string' ? (call.input[key] as string) : '')
+  await update($, agents, list => {
+    const known = list.find(agent => agent.id === agentId)
+    if (known) return list.map(agent => (agent.id === agentId ? { ...agent, toolUseId: call.id } : agent))
+    const agent: SubAgent = {
+      id: agentId,
+      toolUseId: call.id,
+      description: text('description') || text('prompt').split('\n')[0]!.slice(0, 80),
+      type: text('subagent_type') || 'general-purpose',
+      startedAt: call.started,
+      status: 'running',
+    }
+    return [...list, agent].slice(-MAX_ACTIVITY)
+  })
 }
 
 function recordTask(list: Task[], id: string, change: Partial<Task>): Task[] {
@@ -371,7 +397,7 @@ export const register: Register = on => {
                 status: isError ? ('error' as const) : ('ok' as const),
                 ms: Date.now() - started,
                 output,
-                category: settleCategory(classified.category, ran.isReadOnly === true),
+                category: AGENT_TOOLS.has(String(e.tool)) ? ('action' as const) : settleCategory(classified.category, ran.isReadOnly === true),
                 ...fromResult,
               }
             : entry,
@@ -380,6 +406,13 @@ export const register: Register = on => {
       if (classified.kind === 'critical') {
         await update($, unseenCritical, ids => [...ids, id])
       }
+      if (AGENT_TOOLS.has(String(e.tool)) && !isError) await linkAgentCall($, { id, started, input, output })
+    }
+
+    const handbackLoop = String(e.tool) === 'SubagentHandback' ? (e as { agentId?: string }).agentId : undefined
+    if (handbackLoop) {
+      const loop = handbackLoop
+      await update($, agents, list => list.map(agent => (agent.id === loop ? { ...agent, status: 'done' as const, endedAt: Date.now() } : agent)))
     }
 
     // A lista de tarefas é a do loop principal: a de um subagente não substitui a sua.
