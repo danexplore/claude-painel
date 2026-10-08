@@ -24,7 +24,7 @@ import {
 } from './lib/layout'
 import { parseGitStatus, parsePrView } from './lib/parse'
 import { changesStat, filesChanged, homePath, mergeFileEvents } from './lib/files'
-import { entryDetail, fileDiff } from './views/detail'
+import { coloredStat, entryDetail, fileDiff } from './views/detail'
 
 const PANE = 'painel'
 const MAX_ACTIVITY = 200
@@ -508,7 +508,7 @@ export const register: Register = on => {
               label={truncate(cleanText(entry.label), Math.max(4, labelRoom - tail.length))}
               onPress={() => toggleExpanded(entry.id)}
             />
-            {tail && <Text dimColor>{tail}</Text>}
+            {tail && coloredStat(kit, `tail-${entry.id}`, tail)}
           </Box>
           {isOpen && <Box paddingLeft={2}>{detailFor(entry, labelRoom)}</Box>}
         </Box>
@@ -652,8 +652,11 @@ export const register: Register = on => {
         <Box flexDirection="column">
           {tabs}
           {changedFiles.length > 0 && (
-            <Text dimColor>
-              {changedFiles.length} {changedFiles.length === 1 ? 'arquivo' : 'arquivos'} nesta sessão · +{added} −{removed}
+            <Text>
+              <Text dimColor>
+                {changedFiles.length} {changedFiles.length === 1 ? 'arquivo' : 'arquivos'} nesta sessão ·{' '}
+              </Text>
+              {coloredStat(kit, 'files-total', `+${added} −${removed}`)}
             </Text>
           )}
           {rule}
@@ -675,9 +678,7 @@ export const register: Register = on => {
                       onPress={() => toggleExpanded(key)}
                     />
                   </Box>
-                  <Text dimColor>
-                    {stat}  {file.changes.length}×
-                  </Text>
+                  {coloredStat(kit, `file-stat-${file.path}`, `${stat}  ${file.changes.length}×`)}
                 </Box>
                 {isOpen && (
                   <Box flexDirection="column" paddingLeft={2}>

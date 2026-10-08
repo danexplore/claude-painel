@@ -37,6 +37,29 @@ function textWrap(options: DetailOptions): 'wrap' | 'truncate-end' {
   return options.isNarrow && !options.isFull ? 'truncate-end' : 'wrap'
 }
 
+const STAT_PART = /([+]\d+|−\d+)/
+
+/** `+N −M` com o mais em verde e o menos em vermelho; o resto do texto, apagado. */
+export function coloredStat(kit: Kit, key: string, text: string): RenderNode {
+  const { Text } = kit
+  return (
+    <Text key={key}>
+      {text
+        .split(STAT_PART)
+        .filter(Boolean)
+        .map((part, index) => (
+          <Text
+            key={`${key}-${index}`}
+            color={part.startsWith('+') ? 'diffAdded' : part.startsWith('−') ? 'diffRemoved' : undefined}
+            dimColor={!STAT_PART.test(part)}
+          >
+            {part}
+          </Text>
+        ))}
+    </Text>
+  )
+}
+
 /** Na lista estreita, as duas últimas partes do caminho bastam: `…/.claude-plugin/plugin.json`. */
 function displayPath(path: string, options: DetailOptions): string {
   const shown = homePath(path, options.home)
@@ -164,7 +187,7 @@ export function fileDiff(kit: Kit, id: string, change: FileChange, options: Deta
         <Text dimColor>{TREE}</Text>
         <Text>{verb} </Text>
         <Text bold>{displayPath(file.path, options)}</Text>
-        <Text dimColor> {stat}</Text>
+        {coloredStat(kit, `${id}-${file.path}-stat`, ` ${stat}`)}
       </Text>
       <Box flexDirection="column" paddingLeft={2}>
         {file.diff !== undefined ? (
