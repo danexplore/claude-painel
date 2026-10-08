@@ -373,6 +373,11 @@ describe('visualizador de MCP', () => {
     expect(readMcpOutput(real, false)).toEqual({ kind: 'rows', rows: [{ fn: 'a', ok: true }] })
   })
 
+  test('aviso como texto puro, sem JSON em volta, vira linhas', async () => {
+    const plain = (JSON.parse(real) as { result: string }).result
+    expect(readMcpOutput(plain, false)).toEqual({ kind: 'rows', rows: [{ fn: 'a', ok: true }] })
+  })
+
   test('aviso real cortado no meio ainda vira linhas', async () => {
     expect(readMcpOutput(real.slice(0, real.indexOf('</untrusted')), false)).toEqual({ kind: 'rows', rows: [{ fn: 'a', ok: true }] })
   })

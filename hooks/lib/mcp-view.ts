@@ -50,15 +50,15 @@ function untrustedBody(text: string): string | undefined {
 }
 
 /**
- * Saída grande chega cortada e o JSON do envelope não fecha. O miolo ainda está lá, escapado
- * como string JSON: tira o envelope à mão, desfaz os escapes e tenta ler o que sobrar.
+ * Saída grande chega cortada e o JSON do envelope não fecha, ou o servidor manda o aviso como texto
+ * puro: tira o envelope à mão, desfaz os escapes (se houver) e tenta ler o que sobrar.
  */
 function salvageEnvelope(raw: string): unknown {
-  const open = lastOpenTag(raw, raw.length)
+  // O aviso cita a marcação também depois do dado: a abertura certa é a última antes do fechamento.
+  const close = raw.search(/<\/untrusted-data-/)
+  const open = lastOpenTag(raw, close >= 0 ? close : raw.length)
   if (!open) return undefined
-  const rest = raw.slice(open.end)
-  const close = rest.search(/<\/untrusted-data-/)
-  const escaped = (close >= 0 ? rest.slice(0, close) : rest).replace(/^(\\n|\s)+|(\\n|\s)+$/g, '')
+  const escaped = raw.slice(open.end, close >= 0 ? close : raw.length).replace(/^(\\n|\s)+|(\\n|\s)+$/g, '')
   const inner = parseJson(`"${escaped.replace(/\\?$/, '')}"`)
   const text = typeof inner === 'string' ? inner : escaped.replace(/\\n/g, '\n').replace(/\\"/g, '"')
   return parseJson(text) ?? text
