@@ -174,6 +174,12 @@ describe('layout da faixa', () => {
     expect(items.map(item => item.activity.id)).toEqual(['a'])
   })
 
+  test('comando longo é cortado em vez de sumir', async () => {
+    const long = { ...entry('a', 'plain', 'ok'), label: 'x'.repeat(300) }
+    const items = activityItems([long], [], 40, 0)
+    expect(items.map(item => item.label.endsWith('…') && item.label.length <= 38)).toEqual([true])
+  })
+
   test('em andamento vem primeiro', async () => {
     const list = [entry('a', 'plain', 'ok'), entry('b', 'cli', 'running')]
     expect(activityItems(list, [], 200, 0).map(item => item.activity.id)).toEqual(['b', 'a'])

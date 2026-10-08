@@ -23,7 +23,7 @@ const OUTPUT_PREVIEW_LINES = 40
 const GIT_EVERY_MS = 10_000
 const PR_EVERY_MS = 60_000
 const TICK_MS = 1_000
-const ACTIVITY_HOTKEY_WIDTH = 'a: atividade'.length + 3
+const ACTIVITY_HOTKEY_WIDTH = 'a: atividade'.length + 4
 
 const activity = atom({ plugin: 'painel', key: 'activity' } as const, [] as Activity[])
 const unseenCritical = atom({ plugin: 'painel', key: 'unseenCritical' } as const, [] as string[])
@@ -48,7 +48,7 @@ const TONE_STYLE: Record<Tone, { color?: string; dimColor?: boolean }> = {
   cli: { color: 'cyan' },
 }
 
-const FILTER_LABEL: Record<ActivityFilter, string> = { all: 'todos', critical: '⚠', mcp: '◆', cli: '⚙' }
+const FILTER_LABEL: Record<ActivityFilter, string> = { all: 'todos', critical: '⚠ críticos', mcp: '◆ MCP', cli: '⚙ CLI' }
 
 const GIT_TOUCHING_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'Bash'])
 
@@ -105,12 +105,16 @@ async function refreshPr($: Engine): Promise<void> {
   }
 }
 
+// $.ui.open vem antes de qualquer await: só uma abertura feita direto no clique conta como pedida
+// pela pessoa; depois de esperar, o engine a trata como espontânea e não a mostra abaixo de 144 colunas.
 async function openPane($: Engine, target: PaneTarget): Promise<void> {
+  const opened = $.ui.open({ id: PANE, title: 'Painel', focus: true, closeOnEscape: true })
   await update($, tab, () => target.tab)
   if (target.filter) await update($, filter, () => target.filter!)
   if (target.expand) await update($, expanded, () => target.expand!)
   await update($, unseenCritical, () => [])
-  await $.ui.open({ id: PANE, title: 'Painel', focus: true, closeOnEscape: true })
+  const placed = await opened
+  if (!placed.isPlaced) $.ui.toast(`Painel não abriu: ${placed.reason}`)
 }
 
 function recordTask(list: Task[], id: string, change: Partial<Task>): Task[] {
@@ -227,7 +231,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
-    const width = e.props.bodyColumns
+    const width = e.props.bodyColumns - 1
     const currentTime = (await read($, now)) || Date.now()
 
     const renderPiece = (piece: Piece, key: string) => (
@@ -251,7 +255,7 @@ export const register: Register = on => {
     )
 
     const statusLine = (
-      <Box gap={2}>
+      <Box gap={2} paddingLeft={1}>
         {segments.map(segment =>
           segment.target ? (
             <Button
@@ -275,7 +279,7 @@ export const register: Register = on => {
     )
 
     const activityLine = (
-      <Box columnGap={3}>
+      <Box columnGap={3} paddingLeft={1}>
         {items.map(item => (
           <Box key={`item-${item.activity.id}`}>
             {renderPiece(item.icon, `icon-${item.activity.id}`)}
@@ -306,7 +310,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
-    const width = e.props.bodyColumns
+    const width = e.props.bodyColumns - 1
     const currentTab = await read($, tab)
     const currentFilter = await read($, filter)
     const list = await read($, activity)

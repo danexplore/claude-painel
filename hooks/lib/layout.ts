@@ -222,8 +222,13 @@ export function activityItems(
 
   const items = [...required]
   for (const item of optional) {
-    if (total([...items, item]) > width) break
-    items.push(item)
+    if (total([...items, item]) <= width) {
+      items.push(item)
+      continue
+    }
+    const room = width - total([...items, { ...item, label: '' }])
+    if (room >= MIN_LABEL) items.push({ ...item, label: truncate(item.label, room) })
+    break
   }
 
   let labelWidth = Math.max(...items.map(item => item.label.length), MIN_LABEL)
