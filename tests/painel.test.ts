@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { agentIdFromOutput, classifyShell, classifyToolCall, gitNote, isBookkeeping, isReadOnlyShell, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
 import { bar, cleanText, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
-import { activityItems, arrangeWithAgents, categoryOf, currentWork, fitSegments, workLabel, compactWorkLabel, maskedCount, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
+import { activityItems, arrangeWithAgents, categoryOf, countCategories, countsLabel, currentWork, iconFor, isHiddenRead, fitSegments, workLabel, compactWorkLabel, maskedCount, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
 import { withMcpFields } from '../hooks/views/detail'
 import { filesChanged, groupByProject, homePath, mergeFileEvents, projectPath } from '../hooks/lib/files'
@@ -46,6 +46,20 @@ describe('classificação de comandos', () => {
 
   test('DELETE com WHERE não é crítico', async () => {
     expect(classifyShell("psql -c 'delete from users where id = 1'")).toBe('cli')
+  })
+
+  test('consulta MCP com prefixo do servidor é leitura', async () => {
+    expect(classifyToolCall('mcp__elevenlabs__creative_get_flow_run_status', {}).category).toBe('read')
+    expect(classifyToolCall('mcp__elevenlabs__creative_run_flow_nodes', {}).category).toBe('action')
+  })
+
+  test('consulta MCP fica visível com ◆ e conta à parte das leituras', async () => {
+    const base = { startedAt: 0, status: 'ok' as const, detail: '', groupId: 'g' }
+    const mcpRead: Activity = { ...base, id: 'm', kind: 'mcp', category: 'read', label: 'elevenlabs · creative_get_flow_run_status', isMcp: true }
+    const fileRead: Activity = { ...base, id: 'r', kind: 'plain', category: 'read', label: 'Read a.ts' }
+    expect([isHiddenRead(mcpRead), isHiddenRead(fileRead), iconFor(mcpRead).text]).toEqual([false, true, '◆'])
+    const counts = countCategories([mcpRead, fileRead])
+    expect([counts.mcp, counts.read, countsLabel(counts)]).toEqual([1, 1, '1 MCP'])
   })
 
   test('apply_migration é crítico', async () => {
@@ -832,7 +846,7 @@ test('README escrito aparece com bloco de código e tabela desenhados', async ($
 
 describe('faixa compacta', () => {
   test('contagem curta junta edições, ações, leituras e agentes', () => {
-    const work = { counts: { edit: 4, action: 14, read: 5 }, total: 23, running: undefined }
+    const work = { counts: { edit: 4, action: 14, read: 5, mcp: 0 }, total: 23, running: undefined }
     expect(compactWorkLabel(work, 1)).toBe('4✎ 14▶ 5· ◇1')
   })
 

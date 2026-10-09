@@ -138,7 +138,8 @@ function stringField(input: Record<string, unknown>, field: string): string | un
 
 const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'NotebookRead', 'BashOutput'])
 const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
-const MCP_READ = /^(?:get|list|search|read|fetch|query_logs)_?/
+/** O verbo pode vir depois do prefixo do servidor: `creative_get_flow_run_status`, `planner_list_posts`. */
+const MCP_READ = /^(?:[a-z]+_)?(?:get|list|search|read|fetch|query_logs)(?:_|$)/
 const SHELL_EDIT = [/\bsed\s+(?:-[a-z]*\s+)*-i/, /\bperl\s+(?:-[a-z]*\s+)*-[a-z]*i/, /\btee\b/, /(?:^|[^>&2])>>?\s*(?!\/dev\/null|&)[\w~./"'-]/]
 
 function lineCount(text: string | undefined): number {

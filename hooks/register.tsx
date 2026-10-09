@@ -9,6 +9,7 @@ import {
   categoryOf,
   countCategories,
   countsLabel,
+  isHiddenRead,
   currentWork,
   compactWorkLabel,
   maskedCount,
@@ -551,7 +552,7 @@ export const register: Register = on => {
     const isReadsShown = await read($, showReads)
     // Com a lista lateral aberta os comandos já estão nela: fica só o que está rodando agora.
     const items = activityItems(
-      (await read($, activity)).filter(entry => (isReadsShown || categoryOf(entry) !== 'read') && (!isSideListShown || entry.status === 'running')),
+      (await read($, activity)).filter(entry => (isReadsShown || !isHiddenRead(entry)) && (!isSideListShown || entry.status === 'running')),
       isSideListShown ? [] : await read($, unseenCritical),
       Math.max(0, width - ACTIVITY_HOTKEY_WIDTH - counterWidth),
       currentTime,
@@ -581,7 +582,7 @@ export const register: Register = on => {
             <Button
               key={`open-${item.activity.id}`}
               plain
-              dimColor={categoryOf(item.activity) === 'read' && item.activity.status === 'ok' ? true : undefined}
+              dimColor={isHiddenRead(item.activity) && item.activity.status === 'ok' ? true : undefined}
               label={item.label}
               onPress={() => void openPane($, { tab: 'activity', expand: item.activity.id })}
             />
@@ -651,7 +652,7 @@ export const register: Register = on => {
             <Button
               key={`open-${entry.id}`}
               plain
-              dimColor={categoryOf(entry) === 'read' && entry.status !== 'error' && !isOpen ? true : undefined}
+              dimColor={isHiddenRead(entry) && entry.status !== 'error' && !isOpen ? true : undefined}
               label={truncate(cleanText(entry.label), Math.max(4, labelRoom - tail.length))}
               onPress={() => toggleExpanded(entry.id)}
             />
@@ -821,7 +822,7 @@ export const register: Register = on => {
       const { agent, call, children, counts: agentCounts } = row
       const key = `agent-${agent.id}`
       const isOpen = (agent.status === 'running') !== toggled.includes(key)
-      const shown = children.filter(entry => areReadsOpen || categoryOf(entry) !== 'read')
+      const shown = children.filter(entry => areReadsOpen || !isHiddenRead(entry))
       const elapsed = (agent.endedAt ?? currentTime) - agent.startedAt
       const status = agent.status === 'running' ? `◌ ${duration(elapsed)}` : `✓ ${duration(elapsed)}`
       const summary = [countsLabel(agentCounts), agentCounts.read ? readsLabel(agentCounts.read) : ''].filter(Boolean).join(' · ')
@@ -875,7 +876,7 @@ export const register: Register = on => {
           const isOpen = (index === 0) !== toggled.includes(id)
           const areReadsOpen = isReadsShown || readsOpen.includes(id) || currentFilter === 'read'
           const matching = view.entries.filter(entry => matchesFilter(entry, currentFilter))
-          const visible = matching.filter(entry => areReadsOpen || categoryOf(entry) !== 'read')
+          const visible = matching.filter(entry => areReadsOpen || !isHiddenRead(entry))
           const hiddenReads = matching.length - visible.length
           const summary = countsLabel(view.counts)
           const since = sinceLabel(currentTime - view.request.startedAt)
@@ -897,7 +898,7 @@ export const register: Register = on => {
                   {arrangeWithAgents(matching, agentList).map(row =>
                     row.kind === 'agent'
                       ? agentBlock(row.row, areReadsOpen, width - 4)
-                      : (areReadsOpen || categoryOf(row.group.activity) !== 'read') && entryRow(row.group.activity, row.group.count, width - 4),
+                      : (areReadsOpen || !isHiddenRead(row.group.activity)) && entryRow(row.group.activity, row.group.count, width - 4),
                   )}
                   {hiddenReads > 0 && (
                     <Button

@@ -49,6 +49,15 @@ export function categoryOf(activity: Activity): ActivityCategory {
   return category
 }
 
+function isMcpEntry(activity: Activity): boolean {
+  return activity.isMcp === true || activity.kind === 'mcp'
+}
+
+/** Leitura que fica atrás do `N leituras`; consulta MCP é leitura, mas aparece sempre, com `◆`. */
+export function isHiddenRead(activity: Activity): boolean {
+  return categoryOf(activity) === 'read' && !isMcpEntry(activity)
+}
+
 export function groupIdOf(activity: Activity): string {
   return activity.groupId ?? START_GROUP
 }
@@ -59,8 +68,9 @@ export function iconFor(activity: Activity): Piece {
   if (activity.kind === 'critical') return { text: '⚠', tone: 'high', bold: true }
   const category = categoryOf(activity)
   if (category === 'edit') return { text: CATEGORY_ICON.edit, tone: 'warn' }
+  if (isMcpEntry(activity)) return { text: '◆', tone: 'mcp' }
   if (category === 'read') return { text: CATEGORY_ICON.read, tone: 'dim' }
-  return activity.isMcp || activity.kind === 'mcp' ? { text: '◆', tone: 'mcp' } : { text: CATEGORY_ICON.action, tone: 'cli' }
+  return { text: CATEGORY_ICON.action, tone: 'cli' }
 }
 
 const CHECK_GLYPH = { pass: '✓', fail: '✗', pending: '⏳' } as const
@@ -302,11 +312,15 @@ export function matchesFilter(activity: Activity, filter: ActivityFilter): boole
   return categoryOf(activity) === filter
 }
 
-export type CategoryCounts = Record<ActivityCategory, number>
+/** `read` conta só as leituras escondidas; as consultas MCP ficam em `mcp`. */
+export type CategoryCounts = Record<ActivityCategory, number> & { mcp: number }
 
 export function countCategories(list: Activity[]): CategoryCounts {
-  const counts: CategoryCounts = { edit: 0, action: 0, read: 0 }
-  for (const entry of list) counts[categoryOf(entry)] += 1
+  const counts: CategoryCounts = { edit: 0, action: 0, read: 0, mcp: 0 }
+  for (const entry of list) {
+    if (categoryOf(entry) === 'read' && !isHiddenRead(entry)) counts.mcp += 1
+    else counts[categoryOf(entry)] += 1
+  }
   return counts
 }
 
@@ -334,6 +348,7 @@ export function countsLabel(counts: CategoryCounts): string {
   const parts = [
     counts.edit ? `${counts.edit} ${counts.edit === 1 ? 'edição' : 'edições'}` : '',
     counts.action ? `${counts.action} ${counts.action === 1 ? 'ação' : 'ações'}` : '',
+    counts.mcp ? `${counts.mcp} MCP` : '',
   ].filter(Boolean)
   return parts.join(' · ')
 }
@@ -365,6 +380,7 @@ export function compactWorkLabel(work: WorkSummary, agentsRunning: number): stri
   const parts = [
     work.counts.edit ? `${work.counts.edit}✎` : '',
     work.counts.action ? `${work.counts.action}▶` : '',
+    work.counts.mcp ? `${work.counts.mcp}◆` : '',
     work.counts.read ? `${work.counts.read}·` : '',
     agentsRunning ? `◇${agentsRunning}` : '',
   ].filter(Boolean)
