@@ -233,6 +233,11 @@ export type ActivityItem = { activity: Activity; icon: Piece; label: string; suf
 export type ActivityGroup = { activity: Activity; count: number }
 
 /** Junta execuções seguidas do mesmo comando com o mesmo resultado; recebe do mais novo ao mais antigo. */
+/** Chamada MCP traz argumentos que mudam o que ela faz: cada uma fica na lista, nunca vira `×N`. */
+function isMcpCall(entry: Activity): boolean {
+  return entry.isMcp === true || entry.kind === 'mcp' || entry.kind === 'critical'
+}
+
 export function groupRepeats(newestFirst: Activity[]): ActivityGroup[] {
   const groups: ActivityGroup[] = []
   for (const entry of newestFirst) {
@@ -242,7 +247,9 @@ export function groupRepeats(newestFirst: Activity[]): ActivityGroup[] {
       entry.status !== 'running' &&
       last.activity.status === entry.status &&
       last.activity.kind === entry.kind &&
-      last.activity.label === entry.label
+      last.activity.label === entry.label &&
+      last.activity.detail === entry.detail &&
+      !isMcpCall(entry)
     if (isRepeat) groups[groups.length - 1] = { ...last, count: last.count + 1 }
     else groups.push({ activity: entry, count: 1 })
   }
@@ -433,4 +440,16 @@ export function arrangeWithAgents(entries: Activity[], agents: SubAgent[]): Grou
 
 export function runningAgents(agents: SubAgent[]): number {
   return agents.filter(agent => agent.status === 'running').length
+}
+
+const GROUP_TITLE_MIN = 10
+
+/** O rótulo do grupo de um pedido no espaço que há: perde as contagens antes de encurtar o título. */
+export function fitGroupLabel(isOpen: boolean, title: string, summary: string, room: number): string {
+  const mark = isOpen ? '▾' : '▸'
+  const full = `${mark} ${title}${summary ? ` · ${summary}` : ''}`
+  if (full.length <= room) return full
+  const bare = `${mark} ${title}`
+  if (bare.length <= room) return bare
+  return `${bare.slice(0, Math.max(GROUP_TITLE_MIN, room - 1))}…`.slice(0, Math.max(1, room))
 }

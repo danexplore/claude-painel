@@ -2,12 +2,15 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { agentIdFromOutput, classifyShell, classifyToolCall, gitNote, isBookkeeping, isReadOnlyShell, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
 import { bar, cleanText, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
-import { activityItems, arrangeWithAgents, categoryOf, countCategories, countsLabel, currentWork, iconFor, isHiddenRead, fitSegments, workLabel, compactWorkLabel, maskedCount, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
-import { readMcpOutput, tableLayout } from '../hooks/lib/mcp-view'
+import { activityItems, arrangeWithAgents, fitGroupLabel, categoryOf, countCategories, countsLabel, currentWork, iconFor, isHiddenRead, fitSegments, workLabel, compactWorkLabel, maskedCount, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
+import { argumentHint, fitMcpLabel, fitMcpRow, resultHint } from '../hooks/lib/mcp-hint'
+import { jsonSummary, readMcpOutput, requestArguments, splitRequest, tableLayout } from '../hooks/lib/mcp-view'
 import { withMcpFields } from '../hooks/views/detail'
 import { filesChanged, groupByProject, homePath, mergeFileEvents, projectPath } from '../hooks/lib/files'
 import { markdownBlocks, plainInline } from '../hooks/lib/markdown'
 import { parseGitStatus, parsePrView } from '../hooks/lib/parse'
+import { cellTone, linePieces, readShellOutput, splitCommand } from '../hooks/lib/shell-view'
+import { changesBetween, markTree, parseTreeDiff, type Run } from '../hooks/lib/worktree'
 import type { Activity } from '../types'
 
 describe('classificação de comandos', () => {
@@ -301,8 +304,27 @@ describe('layout da faixa', () => {
   })
 
   test('repetidos seguidos viram um grupo com contagem', async () => {
-    const list = [entry('a', 'mcp', 'ok'), { ...entry('b', 'mcp', 'ok'), label: 'cmd-a' }, entry('c', 'cli', 'ok')]
+    const list = [entry('a', 'cli', 'ok'), { ...entry('b', 'cli', 'ok'), label: 'cmd-a' }, entry('c', 'plain', 'ok')]
     expect(groupRepeats(list).map(group => group.count)).toEqual([2, 1])
+  })
+
+  test('rótulo do grupo perde as contagens antes de cortar o título', async () => {
+    const title = '"eu quero ngrok"'
+    expect([
+      fitGroupLabel(true, title, '8 edições · 33 ações', 60),
+      fitGroupLabel(true, title, '8 edições · 33 ações', 20),
+      fitGroupLabel(false, title, '8 edições · 33 ações', 10),
+    ]).toEqual(['▾ "eu quero ngrok" · 8 edições · 33 ações', '▾ "eu quero ngrok"', '▸ "eu quer…'.slice(0, 10)])
+  })
+
+  test('mesmo comando com argumentos diferentes não se junta', async () => {
+    const list = [entry('a', 'cli', 'ok'), { ...entry('b', 'cli', 'ok'), detail: 'outro' }]
+    expect(groupRepeats(list).map(group => group.count)).toEqual([1, 1])
+  })
+
+  test('chamadas MCP iguais ficam cada uma na lista', async () => {
+    const list = [entry('a', 'mcp', 'ok'), entry('b', 'mcp', 'ok'), entry('c', 'critical', 'ok'), entry('d', 'critical', 'ok')]
+    expect(groupRepeats(list).map(group => group.count)).toEqual([1, 1, 1, 1])
   })
 
   test('em andamento vem primeiro', async () => {
@@ -424,6 +446,152 @@ describe('visualizador de MCP', () => {
     expect(readMcpOutput('{"a":{"b":1}}', false)).toEqual({ kind: 'json', text: '{\n  "a": {\n    "b": 1\n  }\n}' })
   })
 
+  test('objeto com lista de linhas vira campos, a lista fica como tabela', async () => {
+    const out = readMcpOutput('{"total":4,"businesses":[{"id":"1","name":"a"},{"id":"2","name":"b"}]}', false)
+    expect(out).toEqual({
+      kind: 'object',
+      fields: [
+        { key: 'total', value: 4 },
+        { key: 'businesses', value: [{ id: '1', name: 'a' }, { id: '2', name: 'b' }], rows: [{ id: '1', name: 'a' }, { id: '2', name: 'b' }] },
+      ],
+    })
+  })
+
+  test('JSON seguido de texto separa o texto como nota', async () => {
+    expect(readMcpOutput('{"a":{"b":1}}\n\nUse estes dados', false)).toEqual({ kind: 'json', text: '{\n  "a": {\n    "b": 1\n  }\n}', note: 'Use estes dados' })
+  })
+
+  test('texto comum com colchetes não vira JSON', async () => {
+    expect(readMcpOutput('veja [1] e a nota abaixo, sem dado estruturado nenhum aqui', false)).toEqual({
+      kind: 'text',
+      text: 'veja [1] e a nota abaixo, sem dado estruturado nenhum aqui',
+    })
+  })
+
+  const truncatedCases: Array<[string, string, unknown]> = [
+    ['no meio de uma string', '{"a":1,"nome":"Iron', { a: 1, nome: 'Iron' }],
+    ['no meio de uma chave', '{"a":1,"nom', { a: 1 }],
+    ['depois da chave', '{"a":1,"nome":', { a: 1 }],
+    ['no meio de um literal', '{"a":1,"ok":tru', { a: 1 }],
+    ['depois de uma vírgula', '{"a":{"x":1},', { a: { x: 1 } }],
+  ]
+  for (const [name, cut, expected] of truncatedCases) {
+    test(`JSON cortado ${name} é fechado e marcado`, async () => {
+      expect(readMcpOutput(cut, false)).toEqual({ kind: 'json', text: JSON.stringify(expected, null, 2), isTruncated: true })
+    })
+  }
+
+  test('lista de linhas cortada no meio de uma linha mantém as linhas inteiras', async () => {
+    const out = readMcpOutput('{"businesses":[{"id":"1","name":"a"},{"id":"2","na', false)
+    expect(out).toMatchObject({ kind: 'object', isTruncated: true, fields: [{ key: 'businesses', rows: [{ id: '1', name: 'a' }, { id: '2' }] }] })
+  })
+
+  test('result com JSON dentro como texto é aberto, e o erro vira mensagem', async () => {
+    const error = JSON.stringify({ result: JSON.stringify({ error: { code: '2388023', message: 'idioma sendo excluído' } }) })
+    expect(readMcpOutput(error, false)).toEqual({ kind: 'error', message: 'idioma sendo excluído', code: '2388023' })
+    const ok = JSON.stringify({ result: JSON.stringify({ template_id: '1', review_status: 'PENDING' }) })
+    expect(readMcpOutput(ok, false)).toEqual({ kind: 'json', text: '{\n  "template_id": "1",\n  "review_status": "PENDING"\n}' })
+  })
+
+  const playwright = '### Result\n{\n  "complete": true,\n  "w": 374\n}\n### Ran Playwright code\n```js\nawait page.evaluate(\'x\');\n```\n'
+
+  test('resposta em markdown do Playwright vira seções com código e JSON', async () => {
+    expect(readMcpOutput(playwright, false)).toEqual({
+      kind: 'sections',
+      sections: [
+        { title: 'Result', text: '{\n  "complete": true,\n  "w": 374\n}', language: 'json' },
+        { title: 'Ran Playwright code', text: "await page.evaluate('x');", language: 'js' },
+      ],
+    })
+  })
+
+  test('seção Error do Playwright é marcada como erro', async () => {
+    const out = readMcpOutput('### Error\nTimeoutError: x', false)
+    expect(out).toEqual({ kind: 'sections', sections: [{ title: 'Error', text: 'TimeoutError: x', isError: true }] })
+  })
+
+  test('markdown do Playwright dentro de result também é aberto', async () => {
+    expect(readMcpOutput(JSON.stringify({ result: playwright }), false).kind).toBe('sections')
+  })
+
+  test('cerquilhas dentro de um bloco de código não abrem seção', async () => {
+    const out = readMcpOutput('### Snapshot\n```yaml\n### nota\n- a\n```', false)
+    expect(out).toEqual({ kind: 'sections', sections: [{ title: 'Snapshot', text: '### nota\n- a', language: 'yaml' }] })
+  })
+
+  test('argumento de código sai do JSON do pedido', async () => {
+    const detail = JSON.stringify({ function: 'async () => 1', element: 'a' }, null, 2)
+    expect(splitRequest(detail)).toEqual({ rest: '{\n  "element": "a"\n}', codes: [{ key: 'function', source: 'async () => 1' }] })
+  })
+
+  test('linha fechada mostra o argumento que distingue a chamada', async () => {
+    const detail = JSON.stringify({ waba_id: '1', template_name: 'retomada_floripa', language: 'pt_BR', tool: 'x', tool_use_id: 't' }, null, 2)
+    expect([argumentHint({ detail }), argumentHint({ detail: '{}', sql: 'select\n  1 from t' }), argumentHint({ detail: JSON.stringify({ project_id: 'p' }) })]).toEqual([
+      'retomada_floripa',
+      'select 1 from t',
+      '',
+    ])
+  })
+
+  test('linha fechada resume o resultado: erro com código, status, linhas', async () => {
+    const hint = (output: string, status: 'ok' | 'error' = 'ok') => resultHint({ id: `h-${output.length}`, status, output })?.text
+    const error = JSON.stringify({ result: JSON.stringify({ error: { code: '2388023', message: 'x' } }) })
+    expect([hint(error), hint('{"template_id":"1","review_status":"PENDING"}'), hint('[{"a":1},{"a":2}]'), hint('### Result\n{"w":1}')]).toEqual([
+      '✗ 2388023',
+      '✓ PENDING',
+      '✓ 2 linhas',
+      '✓ {"w":1}',
+    ])
+  })
+
+  test('rótulo da linha MCP perde o servidor, depois o argumento, e só então a ferramenta', async () => {
+    const label = 'playwright · browser_take_screenshot'
+    expect([fitMcpLabel(label, 'x.png', 60), fitMcpLabel(label, 'x.png', 40), fitMcpLabel(label, 'x.png', 30), fitMcpLabel(label, 'x.png', 22), fitMcpLabel(label, 'x.png', 10)]).toEqual([
+      'playwright · browser_take_screenshot · x.png',
+      'browser_take_screenshot · x.png',
+      'browser_take_screenshot',
+      'browser_take_screensh…',
+      'browser_t…',
+    ])
+  })
+
+  test('linha estreita: resumo encolhe para o glifo e some antes de cortar a ferramenta', async () => {
+    const hint = { text: '✓ {"w":374}', isError: false }
+    const label = 'playwright · browser_evaluate'
+    expect([
+      fitMcpRow(label, '', hint, 60),
+      fitMcpRow(label, '', hint, 22),
+      fitMcpRow(label, '', hint, 14),
+      fitMcpRow(label, '', undefined, 14),
+    ]).toEqual([
+      { label: 'playwright · browser_evaluate', hint: '✓ {"w":374}' },
+      { label: 'browser_evalu…', hint: '✓ {"w"…' },
+      { label: 'browser_eva…', hint: '✓' },
+      { label: 'browser_evalu…', hint: '' },
+    ])
+  })
+
+  test('Playwright: Result diz algo, o erro vem da seção Error', async () => {
+    const hint = (id: string, output: string, status: 'ok' | 'error' = 'ok') => resultHint({ id, status, output })
+    expect(hint('p1', '### Result\n{"w":1}\n### Ran Playwright code\n```js\nx\n```')?.text).toBe('✓ {"w":1}')
+    expect(hint('p2', '### Ran Playwright code\n```js\nx\n```')?.text).toBe('✓')
+    expect(hint('p3', '### Error\nError: File access denied', 'error')).toEqual({ text: '✗ Error: File access denied', isError: true })
+  })
+
+  test('blocos de conteúdo do MCP são abertos', async () => {
+    const blocks = JSON.stringify([{ type: 'text', text: '[{"id":1}]' }])
+    expect(readMcpOutput(blocks, false)).toEqual({ kind: 'rows', rows: [{ id: 1 }] })
+  })
+
+  test('resumo diz o formato do JSON', async () => {
+    expect([jsonSummary('{"a":1,"b":2}'), jsonSummary('[1,2,3]'), jsonSummary('[1]')]).toEqual(['objeto · 2 chaves', 'lista · 3 itens', 'lista · 1 item'])
+  })
+
+  test('pedido tira tool e tool_use_id do evento', async () => {
+    const detail = JSON.stringify({ action: 'list', tool: 'mcp__x__y', tool_use_id: 't1' }, null, 2)
+    expect(requestArguments(detail)).toBe('{\n  "action": "list"\n}')
+  })
+
   test('tabela que cabe tem uma largura por coluna', async () => {
     expect(tableLayout([{ id: 12, nome: 'ana' }], 40)?.widths).toEqual([2, 4])
   })
@@ -473,6 +641,50 @@ test('lista mostra o resultado do Supabase como registro ao expandir', async ($,
   const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
   await ui.press({ key: 'open-sql1' })
   expect((await ui.find({ text: /approved_rows/ })) !== undefined).toBe(true)
+  await ui.unmount()
+})
+
+test('chamada MCP separa o pedido da resposta e mostra a lista como tabela', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('tool.call', () => ({ result: {}, text: '{"total":2,"businesses":[{"id":"1","name":"Ecosys"},{"id":"2","name":"Ironberg"}]}' }))
+  await $.tool.call({ tool: 'mcp__whatsapp__businesses', tool_use_id: 'wa1', action: 'list' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'open-wa1' })
+  const found = await Promise.all([/→ pedido/, /← resposta/, /businesses/, /Ironberg/, /tool_use_id/].map(text => ui.find({ text })))
+  expect(found.map(node => node !== undefined)).toEqual([true, true, true, true, false])
+  await ui.unmount()
+})
+
+test('chamada do Playwright mostra o código à parte e a resposta em seções', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('tool.call', () => ({ result: {}, text: '### Result\n{"w":374}\n### Ran Playwright code\n```js\nawait page.evaluate(1);\n```' }))
+  await $.tool.call({ tool: 'mcp__playwright__browser_evaluate', tool_use_id: 'pw1', function: 'async () => 1' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'open-pw1' })
+  const found = await Promise.all([/Ran Playwright code/, /"w": 374/, /async \(\) => 1/].map(text => ui.find({ text })))
+  expect(found.map(node => node !== undefined)).toEqual([true, true, true])
+  await ui.unmount()
+})
+
+test('seção longa do Playwright fica recolhida e a de resultado fica aberta', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  const snapshot = Array.from({ length: 30 }, (_, index) => `- linha${index}`).join('\n')
+  on('tool.call', () => ({ result: {}, text: `### Result\n{"w":374}\n### Snapshot\n\`\`\`yaml\n${snapshot}\n\`\`\`` }))
+  await $.tool.call({ tool: 'mcp__playwright__browser_snapshot', tool_use_id: 'pw2' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'open-pw2' })
+  const found = await Promise.all([/"w": 374/, /Snapshot · 30 linhas/, /linha5/].map(text => ui.find({ text })))
+  expect(found.map(node => node !== undefined)).toEqual([true, true, false])
+  await ui.unmount()
+})
+
+test('linha fechada do MCP mostra o argumento e o resultado', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('tool.call', () => ({ result: {}, text: JSON.stringify({ result: JSON.stringify({ error: { code: '2388023', message: 'x' } }) }) }))
+  await $.tool.call({ tool: 'mcp__whatsapp__create_template', tool_use_id: 'wa2', template_name: 'retomada_floripa' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  const found = await Promise.all([/retomada_floripa/, /✗ 2388023/].map(text => ui.find({ text })))
+  expect(found.map(node => node !== undefined)).toEqual([true, true])
   await ui.unmount()
 })
 
@@ -750,8 +962,7 @@ test('Bash que muda arquivo vira edição e mostra o diff do arquivo', async ($,
   await $.tool.call({ tool: 'Bash', tool_use_id: 'b1', command: "sed -i 's/0.7.0/0.7.1/' plugin.json", description: 'Sobe a versão' } as never)
   const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
   await ui.press({ key: 'open-b1' })
-  const code = await ui.find({ type: 'Code' })
-  expect(JSON.stringify(code)).toContain('@@ -3,1 +3,1 @@')
+  expect((await ui.find({ text: /@@ -3,1 \+3,1 @@/ })) !== undefined).toBe(true)
   await ui.unmount()
 })
 
@@ -859,4 +1070,134 @@ describe('faixa compacta', () => {
     const ids = (masked?: number) => statusSegments({ ...base, masked }).map(segment => segment.id)
     expect([ids(3), ids(0)]).toEqual([['veil'], []])
   })
+})
+
+describe('mudanças de um comando pelo git', () => {
+  const shell = (cwd: string, argv: readonly string[], env: Record<string, string> = {}) => {
+    const done = spawnSync(argv[0]!, argv.slice(1), { cwd, env: { ...process.env, ...env }, encoding: 'utf8' })
+    return { exitCode: done.status ?? 1, stdout: done.stdout ?? '' }
+  }
+
+  test('arquivo novo vira conteúdo e arquivo existente vira diff, em caminho absoluto', async () => {
+    const text = [
+      'diff --git a/a.txt b/a.txt',
+      'index 111..222 100644',
+      '--- a/a.txt',
+      '+++ b/a.txt',
+      '@@ -1,2 +1,2 @@',
+      ' um',
+      '-dois',
+      '+tres',
+      'diff --git a/pasta nova/b.md b/pasta nova/b.md',
+      'new file mode 100644',
+      '--- /dev/null',
+      '+++ b/pasta nova/b.md\t',
+      '@@ -0,0 +1,2 @@',
+      '+# Título',
+      '+texto',
+      'diff --git a/img.png b/img.png',
+      'Binary files a/img.png and b/img.png differ',
+    ].join('\n')
+    expect(parseTreeDiff(text, '/r')).toEqual([
+      { path: '/r/a.txt', diff: '@@ -1,2 +1,2 @@\n um\n-dois\n+tres' },
+      { path: '/r/pasta nova/b.md', content: '# Título\ntexto' },
+    ])
+  })
+
+  test('a fotografia usa um índice temporário e o apaga, sem tocar no índice de verdade', async () => {
+    const calls: string[] = []
+    const run: Run = async (argv, init) => {
+      calls.push(`${argv.join(' ')}${init?.env?.GIT_INDEX_FILE ? ` [${init.env.GIT_INDEX_FILE}]` : ''}`)
+      const key = argv.slice(0, 3).join(' ')
+      const stdout = key === 'git rev-parse --show-toplevel' ? '/r\n' : key === 'git rev-parse --git-path' ? '.git/index\n' : key === 'git write-tree' ? 'abc123\n' : ''
+      return { exitCode: 0, stdout }
+    }
+    expect(await markTree(run, 'toolu_01')).toEqual({ top: '/r', tree: 'abc123' })
+    expect(calls).toEqual([
+      'git rev-parse --show-toplevel',
+      'git rev-parse --git-path index',
+      'cp -f /r/.git/index /r/.git/index.painel-toolu_01',
+      'git add -A [/r/.git/index.painel-toolu_01]',
+      'git write-tree [/r/.git/index.painel-toolu_01]',
+      'rm -f /r/.git/index.painel-toolu_01',
+    ])
+  })
+
+  test('árvores iguais não chamam o diff, e árvores diferentes devolvem só o delta', async () => {
+    const diff = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-x\n+y\n'
+    let diffs = 0
+    const run: Run = async argv => {
+      if (argv.includes('diff')) diffs++
+      return { exitCode: 0, stdout: argv.includes('diff') ? diff : '' }
+    }
+    expect(await changesBetween(run, { top: '/r', tree: 't1' }, { top: '/r', tree: 't1' })).toEqual([])
+    expect(diffs).toBe(0)
+    expect(await changesBetween(run, { top: '/r', tree: 't1' }, { top: '/r', tree: 't2' })).toEqual([{ path: '/r/a.txt', diff: '@@ -1 +1 @@\n-x\n+y' }])
+  })
+})
+
+describe('comandos de shell', () => {
+  test('corrente vira uma etapa por linha, com o operador na frente', async () => {
+    expect(splitCommand('git log -1 --format=%B | tail -2 && git push origin x 2>&1 | tail -3 || echo falhou; ls')).toEqual([
+      'git log -1 --format=%B',
+      '| tail -2',
+      '&& git push origin x 2>&1',
+      '| tail -3',
+      '|| echo falhou',
+      '; ls',
+    ])
+  })
+
+  test('operador dentro de aspas, $(…) ou {} não quebra a etapa', async () => {
+    expect(splitCommand(`echo "a && b" && NEW=$(git rev-parse HEAD | head -c 7) && find . -exec ls {} \\; && git log --format='%h | %s'`)).toEqual([
+      'echo "a && b"',
+      '&& NEW=$(git rev-parse HEAD | head -c 7)',
+      '&& find . -exec ls {} \\;',
+      "&& git log --format='%h | %s'",
+    ])
+  })
+
+  test('heredoc fica como foi escrito', async () => {
+    expect(splitCommand("python3 - <<'EOF'\nprint(1)\nEOF")).toEqual(["python3 - <<'EOF'", 'print(1)', 'EOF'])
+  })
+
+  test('JSON do gh vira dado, diff vira diff, colunas viram tabela, o resto vira linhas', async () => {
+    expect(readShellOutput('gh pr view 1 --json commits', '{"a":{"b":1}}').kind).toBe('data')
+    expect(readShellOutput('git diff', 'diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b').kind).toBe('diff')
+    expect(readShellOutput('gh pr checks', 'lint\tpass\t1m\thttps://x\ntest\tfail\t2m\thttps://y')).toEqual({
+      kind: 'table',
+      rows: [
+        ['lint', 'pass', '1m', 'https://x'],
+        ['test', 'fail', '2m', 'https://y'],
+      ],
+    })
+    expect(readShellOutput('ls', 'a\nb').kind).toBe('lines')
+    expect(readShellOutput('true', '  \n').kind).toBe('empty')
+  })
+
+  test('push, status e log colorem pelo que significam', async () => {
+    expect(linePieces('git push', 'remote: Resolving deltas')).toEqual([{ text: 'remote: Resolving deltas', tone: 'dim' }])
+    expect(linePieces('git push', ' ! [rejected]        main -> main (fetch first)')[0]?.tone).toBe('error')
+    expect(linePieces('git push', ' * [new branch]      x -> x')[0]?.tone).toBe('success')
+    expect(linePieces('git push', ' + f28059b9f2...da9e6ca70a a -> a (forced update)')[0]?.tone).toBe('warning')
+    expect(linePieces('git status -s', ' M a.ts')).toEqual([{ text: ' M', tone: 'warning' }, { text: ' a.ts' }])
+    expect(linePieces('git status --short', '?? novo.ts')[0]?.tone).toBe('success')
+    expect(linePieces('git log --oneline', 'da9e6ca fix: x')).toEqual([{ text: 'da9e6ca', tone: 'warning' }, { text: ' fix: x' }])
+    expect(linePieces('ls', 'da9e6ca fix: x')).toEqual([{ text: 'da9e6ca fix: x' }])
+  })
+
+  test('palavras de estado do gh ganham cor', async () => {
+    expect([cellTone('pass'), cellTone('failure'), cellTone('in_progress'), cellTone('skipping'), cellTone('lint')]).toEqual(['success', 'error', 'warning', 'dim', undefined])
+  })
+})
+
+test('Bash mostra comando e saída em seções separadas, uma etapa por linha', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('tool.call', () => ({ result: {}, text: 'lint\tpass\t1m\ntest\tfail\t2m' }))
+  await $.tool.call({ tool: 'Bash', tool_use_id: 'sh1', command: 'git status -s && gh pr checks', description: 'Confere o PR' } as never)
+  const ui = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await ui.press({ key: 'open-sh1' })
+  const found = await Promise.all([/→ comando/, /← saída/, /2 etapas/, /&& gh pr checks/, /fail/].map(text => ui.find({ text })))
+  expect(found.map(node => node !== undefined)).toEqual([true, true, true, true, true])
+  await ui.unmount()
 })
