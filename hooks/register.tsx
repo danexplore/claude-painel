@@ -19,6 +19,7 @@ import {
   sinceLabel,
   fitSegments,
   arrangeWithAgents,
+  fitGroupLabel,
   groupRepeats,
   runningAgents,
   type AgentRow,
@@ -30,8 +31,10 @@ import {
   type Tone,
 } from './lib/layout'
 import { parseGitStatus, parsePrView } from './lib/parse'
+import { changesBetween, markTree, type Run } from './lib/worktree'
 import { changesStat, filesChanged, groupByProject, mergeFileEvents, projectPath, projectRootOf } from './lib/files'
-import { coloredStat, entryDetail, fileDiff } from './views/detail'
+import { argumentHint, fitMcpRow, resultHint } from './lib/mcp-hint'
+import { coloredStat, entryDetail, fileDiff, withMcpFields } from './views/detail'
 
 const PANE = 'painel'
 const MAX_ACTIVITY = 200
@@ -43,9 +46,14 @@ const PR_EVERY_MS = 60_000
 const TICK_MS = 1_000
 const ACTIVITY_HOTKEY_WIDTH = 'a: atividade'.length + 4
 const COMPACT_COLUMNS = 42
+/** O engine põe `x: ` na frente de cada botão com tecla de atalho. */
+const HOTKEY_PREFIX = 3
+const HEADER_GAP = 2
 const COMPACT_TASKS = 5
 const INLINE_ROWS = 14
 const COMPACT_PREVIEW_LINES = 6
+/** Folga na linha da lista: o ícone pode ocupar duas células em algumas fontes. */
+const ROW_MARGIN = 2
 const COMPACT_DETAIL_LINES = 3
 
 const activity = atom({ plugin: 'painel', key: 'activity' } as const, [] as Activity[])
@@ -94,6 +102,8 @@ const veilMasked = atom({ plugin: 'painel', key: 'veilMasked' } as const, 0)
 const showReads = atom({ plugin: 'painel', key: 'showReads' } as const, false)
 const toggledGroups = atom({ plugin: 'painel', key: 'toggledGroups' } as const, [] as string[])
 const readsOpenIn = atom({ plugin: 'painel', key: 'readsOpenIn' } as const, [] as string[])
+/** Conta cada rolagem do painel: ler no desenho faz o cabeçalho fixo acompanhar o topo da janela. */
+const scrollTick = atom({ plugin: 'painel', key: 'scrollTick' } as const, 0)
 
 const TONE_STYLE: Record<Tone, { color?: string; dimColor?: boolean }> = {
   normal: {},
@@ -106,6 +116,7 @@ const TONE_STYLE: Record<Tone, { color?: string; dimColor?: boolean }> = {
 
 const FILTERS = ['all', 'edit', 'action', 'read', 'critical'] as const
 const FILTER_LABEL: Record<ActivityFilter, string> = { all: 'todos', edit: '✎ edição', action: '▶ ação', read: '· leitura', critical: '⚠' }
+const FILTER_LABEL_SHORT: Record<ActivityFilter, string> = { all: 'todos', edit: '✎', action: '▶', read: '·', critical: '⚠' }
 const REQUEST_TEXT_MAX = 28
 
 function knownFilter(value: string): ActivityFilter {
@@ -396,11 +407,18 @@ export const register: Register = on => {
       ensureTicker($)
     }
 
+    // Um comando que não é só leitura pode mexer em arquivos sem o Claude Code anotar o diff (python, tee, formatadores);
+    // a árvore do git antes e depois diz o que ele mudou.
+    const run: Run = (argv, init) => $.process.run(argv, init)
+    const treeBefore = isTracked && e.tool === 'Bash' && classified.category !== 'read' ? await markTree(run, id).catch(() => undefined) : undefined
+
     const ran = await next(e)
 
     if (isTracked) {
       const isError = ran.deny !== undefined || ran.isError === true
-      const changes = isError ? [] : changesFromResult(String(e.tool), input, ran.result)
+      const reported = isError ? [] : changesFromResult(String(e.tool), input, ran.result)
+      const treeAfter = treeBefore && reported.length === 0 ? await markTree(run, id).catch(() => undefined) : undefined
+      const changes = treeBefore && treeAfter ? await changesBetween(run, treeBefore, treeAfter).catch(() => []) : reported
       const note = gitNote((ran.result as { gitOperation?: GitOperation } | undefined)?.gitOperation)
       const fromResult = {
         ...(changes.length > 0 ? { file: undefined, files: changes, stat: changesStat(changes) } : {}),
@@ -603,12 +621,19 @@ export const register: Register = on => {
     )
   })
 
+  // A janela do painel rola sobre a árvore inteira; depois que ela se move, o cabeçalho é redesenhado no novo topo.
+  on('ui.scroll', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
+    const moved = await next(e)
+    await update($, scrollTick, tick => tick + 1)
+    return moved
+  })
+
   // Um erro no desenho deixaria o painel em branco; aqui ele aparece na tela, com o que falhou.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     try {
     const { Box, Text, Button, Code, Markdown } = $.ui.resolve(e)
     const kit = { Box, Text, Button, Code, Markdown }
-    const width = Math.max(30, e.props.bodyColumns - 1)
+    const width = Math.max(16, e.props.bodyColumns - 1)
     const list = await read($, activity)
     const taskList = await read($, tasks)
     const expandedId = await read($, expanded)
@@ -643,6 +668,13 @@ export const register: Register = on => {
       const isRunning = entry.status === 'running'
       const note = [entry.stat, entry.gitNote].filter(Boolean).join(' · ')
       const tail = isRunning ? ` ${duration(currentTime - entry.startedAt)}` : `${note ? ` ${note}` : ''}${repeatSuffix(count)}`
+      const mcpEntry = withMcpFields(entry)
+      const argument = mcpEntry.isMcp ? argumentHint(mcpEntry) : ''
+      const result = mcpEntry.isMcp ? resultHint(mcpEntry) : undefined
+      const roomForLabel = Math.max(6, labelRoom - tail.length - ROW_MARGIN)
+      const row = mcpEntry.isMcp
+        ? fitMcpRow(cleanText(entry.label), cleanText(argument), result, roomForLabel)
+        : { label: truncate(cleanText(entry.label), roomForLabel), hint: '' }
       return (
         <Box key={`row-${entry.id}`} flexDirection="column">
           <Box>
@@ -653,15 +685,31 @@ export const register: Register = on => {
               key={`open-${entry.id}`}
               plain
               dimColor={isHiddenRead(entry) && entry.status !== 'error' && !isOpen ? true : undefined}
-              label={truncate(cleanText(entry.label), Math.max(4, labelRoom - tail.length))}
+              label={row.label}
               onPress={() => toggleExpanded(entry.id)}
             />
+            {row.hint && (
+              <Text color={result?.isError ? 'error' : undefined} dimColor={!result?.isError} wrap="truncate-end">
+                {' '}
+                {row.hint}
+              </Text>
+            )}
             {tail && coloredStat(kit, `tail-${entry.id}`, tail)}
           </Box>
           {isOpen && <Box paddingLeft={2}>{detailFor(entry, labelRoom)}</Box>}
         </Box>
       )
     }
+
+    // O cabeçalho completo só cabe se sobrar folga entre as abas e o botão do chat; senão fica com rótulos curtos e o chat desce.
+    const fullHeaderLabels = ['«', 'Atividade', `Arquivos ${changedFiles.length}`, ...(taskList.length > 0 ? [`Tarefas ${taskList.length}/${taskList.length}`] : [])]
+    const fullHeaderWidth =
+      fullHeaderLabels.reduce((sum, label) => sum + label.length + HOTKEY_PREFIX, 0) +
+      HEADER_GAP * (fullHeaderLabels.length - 1) +
+      HEADER_GAP +
+      CHAT_TOOLS_LABEL.edits.length +
+      HOTKEY_PREFIX
+    const isCompact = e.props.bodyColumns < fullHeaderWidth
 
     const counts = countCategories(list)
     const criticalCount = list.filter(entry => entry.kind === 'critical').length
@@ -670,26 +718,12 @@ export const register: Register = on => {
         key={`filter-${kind}`}
         plain
         dimColor={currentFilter !== kind ? true : undefined}
-        label={`${FILTER_LABEL[kind]} ${total}`}
+        label={`${(isCompact ? FILTER_LABEL_SHORT : FILTER_LABEL)[kind]} ${total}`}
         onPress={() => void update($, filter, current => (current === kind ? 'all' : kind))}
       />
     )
-    const filters = (
-      <Box gap={2}>
-        {filterButton('all', list.length)}
-        {filterButton('edit', counts.edit)}
-        {filterButton('action', counts.action)}
-        <Button
-          key="reads-toggle"
-          plain
-          dimColor={!isReadsShown ? true : undefined}
-          label={`leitura ${isReadsShown ? '●' : '○'}`}
-          onPress={() => void update($, showReads, shown => !shown)}
-        />
-        {criticalCount > 0 && filterButton('critical', criticalCount)}
-      </Box>
-    )
 
+    await read($, scrollTick)
     const currentTab = await read($, tab)
     const chatMode = await read($, chatTools)
     const openTasks = taskList.filter(task => task.status !== 'completed')
@@ -703,31 +737,63 @@ export const register: Register = on => {
         onPress={() => void update($, tab, () => key)}
       />
     )
+    const chatButton = (
+      <Button
+        key="chat-tools"
+        plain
+        hotkey="t"
+        dimColor={chatMode === 'none' ? true : undefined}
+        label={CHAT_TOOLS_LABEL[chatMode]}
+        onPress={() => void update($, chatTools, mode => CHAT_TOOLS_NEXT[mode])}
+      />
+    )
     const header = (
-      <Box justifyContent="space-between">
-        <Box gap={2}>
+      <Box justifyContent="space-between" gap={HEADER_GAP}>
+        <Box gap={isCompact ? 1 : HEADER_GAP}>
           <Button key="collapse" plain hotkey="r" dimColor label="«" onPress={() => void collapseSideList($)} />
-          {tabButton('activity', '1', 'Atividade')}
-          {tabButton('files', '2', `Arquivos ${changedFiles.length}`)}
-          {taskList.length > 0 && tabButton('tasks', '3', `Tarefas ${taskList.length - openTasks.length}/${taskList.length}`)}
+          {tabButton('activity', '1', isCompact ? 'Ativ' : 'Atividade')}
+          {tabButton('files', '2', `${isCompact ? 'Arq' : 'Arquivos'} ${changedFiles.length}`)}
+          {taskList.length > 0 && tabButton('tasks', '3', `${isCompact ? 'Tar' : 'Tarefas'} ${taskList.length - openTasks.length}/${taskList.length}`)}
         </Box>
-        <Button
-          key="chat-tools"
-          plain
-          hotkey="t"
-          dimColor={chatMode === 'none' ? true : undefined}
-          label={CHAT_TOOLS_LABEL[chatMode]}
-          onPress={() => void update($, chatTools, mode => CHAT_TOOLS_NEXT[mode])}
-        />
+        {!isCompact && chatButton}
       </Box>
     )
+    const filters = (
+      <Box columnGap={isCompact ? 1 : 2} flexWrap="wrap">
+        {filterButton('all', list.length)}
+        {filterButton('edit', counts.edit)}
+        {filterButton('action', counts.action)}
+        <Button
+          key="reads-toggle"
+          plain
+          dimColor={!isReadsShown ? true : undefined}
+          label={`${isCompact ? 'leit' : 'leitura'} ${isReadsShown ? '●' : '○'}`}
+          onPress={() => void update($, showReads, shown => !shown)}
+        />
+        {criticalCount > 0 && filterButton('critical', criticalCount)}
+        {isCompact && chatButton}
+      </Box>
+    )
+
+    // Cabeçalho fixo: sai do fluxo e é pintado na primeira linha da janela, por cima do que rolou até ali;
+    // o espaço reservado mantém o conteúdo abaixo dele, e os espaços limpam o que ficaria por baixo.
+    const scrollTop = Math.max(0, e.props.scroll?.offset ?? 0)
+    const pinnedHeader = [
+      <Box key="header-space" height={1} />,
+      <Box key="header-pinned" position="absolute" top={scrollTop} left={0} width={e.props.bodyColumns} height={1} overflow="hidden">
+        <Box key="header-fill" position="absolute" top={0} left={0}>
+          <Text>{' '.repeat(e.props.bodyColumns)}</Text>
+        </Box>
+        {header}
+      </Box>,
+    ]
 
     if (currentTab === 'files') {
       const added = changedFiles.reduce((sum, file) => sum + file.added, 0)
       const removed = changedFiles.reduce((sum, file) => sum + file.removed, 0)
       return (
         <Box flexDirection="column">
-          {header}
+          {pinnedHeader}
           {changedFiles.length > 0 && (
             <Text>
               <Text dimColor>
@@ -800,7 +866,7 @@ export const register: Register = on => {
       const glyph = { pending: '○', in_progress: '◐', completed: '●' } as const
       return (
         <Box flexDirection="column">
-          {header}
+          {pinnedHeader}
           {rule}
           {taskList.length === 0 && <Text dimColor>Nenhuma tarefa nesta sessão.</Text>}
           {taskList.map(task => (
@@ -854,7 +920,7 @@ export const register: Register = on => {
     }
     return (
       <Box flexDirection="column">
-        {header}
+        {pinnedHeader}
         {filters}
         {rule}
         {taskList.length > 0 && (
@@ -888,10 +954,12 @@ export const register: Register = on => {
                   key={`group-toggle-${id}`}
                   plain
                   dimColor={!isOpen ? true : undefined}
-                  label={`${isOpen ? '▾' : '▸'} ${title}${summary ? ` · ${summary}` : ''}`}
+                  label={fitGroupLabel(isOpen, title, summary, Math.max(8, width - since.length - 1))}
                   onPress={() => void update($, toggledGroups, ids => (ids.includes(id) ? ids.filter(one => one !== id) : [...ids, id]))}
                 />
-                <Text dimColor>{since}</Text>
+                <Text dimColor wrap="truncate-end">
+                  {since}
+                </Text>
               </Box>
               {isOpen && (
                 <Box flexDirection="column" paddingLeft={2}>
