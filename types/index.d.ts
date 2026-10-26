@@ -93,6 +93,7 @@ declare module 'claude-code' {
       pr: PrInfo | null
       usage: UsageInfo | null
       startedAt: number
+      scrollTick: number
       turns: number
       now: number
       tab: PaneTab

@@ -4,6 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Activity, ActivityFilter, FileEvent, GitInfo, ChatTools, PaneTab, PrInfo, RequestGroup, SubAgent, Task, TaskStatus, UsageInfo } from '../types'
 import { agentIdFromOutput, changesFromResult, classifyToolCall, gitNote, isBookkeeping, settleCategory, type GitOperation } from './lib/classify'
 import { cleanText, clockTime, duration, truncate } from './lib/format'
+import { guardRefusal, limitGuardFrom } from './lib/limit-guard'
 import {
   activityItems,
   categoryOf,
@@ -312,7 +313,9 @@ function ensureTicker($: Engine): void {
   })
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const limitGuard = limitGuardFrom(options)
+
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await $.command.register({ name: 'painel', description: 'Abre o painel de atividade e tarefas' })
@@ -349,8 +352,15 @@ export const register: Register = on => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    const result = await next(e)
     const text = e.text.trim()
+    if (limitGuard && !text.startsWith('/')) {
+      const refusal = await $.session.usage().then(usage => guardRefusal(usage.rateLimits, limitGuard), () => undefined)
+      if (refusal) {
+        $.ui.toast(refusal)
+        return { drop: refusal }
+      }
+    }
+    const result = await next(e)
     if (text && !text.startsWith('/')) {
       const request: RequestGroup = { id: `req-${Date.now()}`, text: text.split('\n')[0]!, startedAt: Date.now() }
       await update($, requests, list => [...list, request].slice(-MAX_ACTIVITY))
