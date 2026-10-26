@@ -1,8 +1,32 @@
 {
   "name": "painel",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "author": { "name": "danexplore", "url": "https://github.com/danexplore" },
   "repository": "https://github.com/danexplore/claude-painel",
   "description": "Faixa compacta com uso, git, PR, tarefas e atividade do Claude, com painel de detalhes clicável",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "limitGuardEnabled": {
+      "type": "boolean",
+      "title": "Travar prompts ao atingir o teto de uso",
+      "description": "Recusa prompts novos quando a janela de 5h ou a semanal chega ao teto abaixo. Um turno já em andamento termina normalmente.",
+      "default": false
+    },
+    "limitGuardFiveHour": {
+      "type": "number",
+      "title": "Teto da janela de 5h (%)",
+      "description": "Percentual de uso da janela de 5h a partir do qual os prompts são recusados",
+      "default": 80,
+      "min": 1,
+      "max": 100
+    },
+    "limitGuardWeekly": {
+      "type": "number",
+      "title": "Teto da janela semanal (%)",
+      "description": "Percentual de uso da janela semanal a partir do qual os prompts são recusados",
+      "default": 60,
+      "min": 1,
+      "max": 100
+    }
+  }
 }

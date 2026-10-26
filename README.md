@@ -52,6 +52,22 @@ No Claude Code:
 
 Precisa do Claude Code com suporte a mods e do modo tela cheia (`/tui fullscreen`) para os cliques funcionarem. O PR usa o `gh` autenticado.
 
+## Travar prompts no teto de uso (opcional)
+
+Vem **desligado**. Ligado, o painel recusa prompts novos quando a janela de 5h ou a semanal chega ao teto, e mostra o motivo com o horário em que a janela zera. Um turno já em andamento termina normalmente, e comandos que começam com `/` passam. Se a leitura do uso falhar, o prompt passa.
+
+Ligue em `/config` (campos do `painel`) ou em `~/.claude/settings.json`:
+
+```json
+"pluginConfigs": {
+  "painel@claude-painel": {
+    "options": { "limitGuardEnabled": true, "limitGuardFiveHour": 80, "limitGuardWeekly": 60 }
+  }
+}
+```
+
+Sem os tetos, valem 80% (5h) e 60% (semana).
+
 ## Desenvolver
 
 ```

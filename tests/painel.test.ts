@@ -7,6 +7,7 @@ import { argumentHint, fitMcpLabel, fitMcpRow, resultHint } from '../hooks/lib/m
 import { jsonSummary, readMcpOutput, requestArguments, splitRequest, tableLayout } from '../hooks/lib/mcp-view'
 import { withMcpFields } from '../hooks/views/detail'
 import { filesChanged, groupByProject, homePath, mergeFileEvents, projectPath } from '../hooks/lib/files'
+import { guardRefusal, limitGuardFrom } from '../hooks/lib/limit-guard'
 import { markdownBlocks, plainInline } from '../hooks/lib/markdown'
 import { parseGitStatus, parsePrView } from '../hooks/lib/parse'
 import { cellTone, linePieces, readShellOutput, splitCommand } from '../hooks/lib/shell-view'
@@ -1200,4 +1201,43 @@ test('Bash mostra comando e saída em seções separadas, uma etapa por linha', 
   const found = await Promise.all([/→ comando/, /← saída/, /2 etapas/, /&& gh pr checks/, /fail/].map(text => ui.find({ text })))
   expect(found.map(node => node !== undefined)).toEqual([true, true, true, true, true])
   await ui.unmount()
+})
+
+describe('guarda de limite de uso', () => {
+  const guard = { fiveHour: 80, weekly: 60 }
+  const usage = (fiveHour: number, weekly: number) => [
+    { kind: 'five_hour', percentUsed: fiveHour },
+    { kind: 'seven_day', percentUsed: weekly, resetsAt: '2026-11-01T03:00:00Z' },
+  ]
+
+  test('vem desligada por padrão', () => {
+    expect(limitGuardFrom({})).toBeUndefined()
+    expect(limitGuardFrom({ limitGuardEnabled: false })).toBeUndefined()
+  })
+
+  test('usa 80% e 60% quando ligada sem tetos', () => {
+    expect(limitGuardFrom({ limitGuardEnabled: true })).toEqual(guard)
+  })
+
+  test('aceita tetos próprios e ignora valores inválidos', () => {
+    expect(limitGuardFrom({ limitGuardEnabled: true, limitGuardFiveHour: 50, limitGuardWeekly: 40 })).toEqual({ fiveHour: 50, weekly: 40 })
+    expect(limitGuardFrom({ limitGuardEnabled: true, limitGuardFiveHour: 0, limitGuardWeekly: 150 })).toEqual(guard)
+  })
+
+  test('deixa passar abaixo dos tetos', () => {
+    expect(guardRefusal(usage(79.9, 59.9), guard)).toBeUndefined()
+  })
+
+  test('recusa ao chegar a 80% na janela de 5h', () => {
+    expect(guardRefusal(usage(80, 10), guard)).toContain('janela de 5h em 80%')
+  })
+
+  test('recusa ao chegar a 60% na janela semanal e informa quando zera', () => {
+    expect(guardRefusal(usage(10, 60), guard)).toContain('janela semanal em 60%')
+    expect(guardRefusal(usage(10, 60), guard)).toContain('Zera em 2026-11-01T03:00:00Z')
+  })
+
+  test('deixa passar quando a janela não veio na leitura', () => {
+    expect(guardRefusal([], guard)).toBeUndefined()
+  })
 })
