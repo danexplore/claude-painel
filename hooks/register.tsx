@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Activity, ActivityFilter, FileEvent, GitInfo, ChatTools, PaneTab, PrInfo, RequestGroup, SubAgent, Task, TaskStatus, UsageInfo } from '../types'
 import { agentIdFromOutput, changesFromResult, classifyToolCall, gitNote, isBookkeeping, settleCategory, type GitOperation } from './lib/classify'
 import { cleanText, clockTime, duration, truncate } from './lib/format'
-import { guardRefusal, limitGuardFrom } from './lib/limit-guard'
+import { guardRefusal, guardsPrompt, limitGuardFrom } from './lib/limit-guard'
 import {
   activityItems,
   categoryOf,
@@ -353,7 +353,7 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     const text = e.text.trim()
-    if (limitGuard && !text.startsWith('/')) {
+    if (limitGuard && !text.startsWith('/') && guardsPrompt(e)) {
       const refusal = await $.session.usage().then(usage => guardRefusal(usage.rateLimits, limitGuard), () => undefined)
       if (refusal) {
         $.ui.toast(refusal)
