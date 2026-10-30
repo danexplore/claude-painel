@@ -23,6 +23,14 @@ export function limitGuardFrom(options: PluginOptions): LimitGuard | undefined {
   }
 }
 
+// Só o que a pessoa digitou (no terminal ou pelo Remote Control) é travado; aviso de subagente,
+// gatilho agendado e demais entregas da máquina passam, senão o resultado delas se perde.
+const TYPED_ORIGINS = new Set(['composer', 'bridge'])
+
+export function guardsPrompt(prompt: { origin: { kind: string }; isMeta?: boolean }): boolean {
+  return prompt.isMeta !== true && TYPED_ORIGINS.has(prompt.origin.kind)
+}
+
 export function guardRefusal(limits: readonly RateLimit[], guard: LimitGuard): string | undefined {
   for (const { kind, label, ceiling } of WINDOWS) {
     const limit = limits.find(item => item.kind === kind)

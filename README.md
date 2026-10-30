@@ -54,7 +54,7 @@ Precisa do Claude Code com suporte a mods e do modo tela cheia (`/tui fullscreen
 
 ## Travar prompts no teto de uso (opcional)
 
-Vem **desligado**. Ligado, o painel recusa prompts novos quando a janela de 5h ou a semanal chega ao teto, e mostra o motivo com o horário em que a janela zera. Um turno já em andamento termina normalmente, e comandos que começam com `/` passam. Se a leitura do uso falhar, o prompt passa.
+Vem **desligado**. Ligado, o painel recusa prompts novos quando a janela de 5h ou a semanal chega ao teto, e mostra o motivo com o horário em que a janela zera. Um turno já em andamento termina normalmente, e comandos que começam com `/` passam. Só o que você digita é travado: o aviso de um subagente ou tarefa em segundo plano que terminou, gatilhos agendados e outras entregas automáticas passam sempre, para o resultado não se perder. Se a leitura do uso falhar, o prompt passa.
 
 Ligue em `/config` (campos do `painel`) ou em `~/.claude/settings.json`:
 

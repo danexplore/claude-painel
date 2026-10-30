@@ -7,7 +7,7 @@ import { argumentHint, fitMcpLabel, fitMcpRow, resultHint } from '../hooks/lib/m
 import { jsonSummary, readMcpOutput, requestArguments, splitRequest, tableLayout } from '../hooks/lib/mcp-view'
 import { withMcpFields } from '../hooks/views/detail'
 import { filesChanged, groupByProject, homePath, mergeFileEvents, projectPath } from '../hooks/lib/files'
-import { guardRefusal, limitGuardFrom } from '../hooks/lib/limit-guard'
+import { guardRefusal, guardsPrompt, limitGuardFrom } from '../hooks/lib/limit-guard'
 import { markdownBlocks, plainInline } from '../hooks/lib/markdown'
 import { parseGitStatus, parsePrView } from '../hooks/lib/parse'
 import { cellTone, linePieces, readShellOutput, splitCommand } from '../hooks/lib/shell-view'
@@ -1239,5 +1239,17 @@ describe('guarda de limite de uso', () => {
 
   test('deixa passar quando a janela não veio na leitura', () => {
     expect(guardRefusal([], guard)).toBeUndefined()
+  })
+
+  test('trava só o que a pessoa digitou', () => {
+    expect(guardsPrompt({ origin: { kind: 'composer' } })).toBe(true)
+    expect(guardsPrompt({ origin: { kind: 'bridge' } })).toBe(true)
+  })
+
+  test('nunca descarta o aviso de um subagente ou tarefa em segundo plano', () => {
+    expect(guardsPrompt({ origin: { kind: 'task-notification' } })).toBe(false)
+    expect(guardsPrompt({ origin: { kind: 'unclassified' }, isMeta: true })).toBe(false)
+    expect(guardsPrompt({ origin: { kind: 'scheduled-trigger' } })).toBe(false)
+    expect(guardsPrompt({ origin: { kind: 'composer' }, isMeta: true })).toBe(false)
   })
 })
