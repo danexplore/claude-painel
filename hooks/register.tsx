@@ -161,30 +161,58 @@ async function refreshGit($: Engine): Promise<GitInfo | null> {
   }
 }
 
+/** A leitura do `gh` em andamento e a branch dela: pedidos repetidos para a mesma branch esperam essa mesma leitura. */
+let prRead: { branch: string; done: Promise<void> } | undefined
+
 async function refreshPr($: Engine): Promise<void> {
-  if ((await read($, git)) === null) {
+  const branch = (await read($, git))?.branch
+  if (branch === undefined) {
+    prRead = undefined
     await update($, pr, () => null)
     return
   }
+  if (prRead?.branch === branch) return prRead.done
+  const done = readPr($, branch)
+  prRead = { branch, done }
   try {
-    const view = await $.process.run(['gh', 'pr', 'view', '--json', PR_VIEW_FIELDS], {
-      timeoutMs: 15_000,
-    })
-    if (view.exitCode === 0) {
-      await update($, pr, () => parsePrView(view.stdout))
-    } else {
-      const hasNoPr = /no (?:open )?pull requests? found/i.test(view.stderr)
-      await update($, pr, () => (hasNoPr ? { state: 'none' } : null))
-    }
-  } catch {
-    await update($, pr, () => null)
+    await done
+  } finally {
+    if (prRead?.done === done) prRead = undefined
   }
+}
+
+/** Grava o que o `gh` disse só se a branch ainda for a mesma; uma falha passageira mantém a PR que já estava na tela. */
+async function readPr($: Engine, branch: string): Promise<void> {
+  const view = await $.process.run(['gh', 'pr', 'view', '--json', PR_VIEW_FIELDS], { timeoutMs: 15_000 }).catch(() => null)
+  if ((await read($, git))?.branch !== branch) return
+  const info = view?.exitCode === 0 ? parsedPr(view.stdout) : null
+  if (info) {
+    await update($, pr, () => info)
+  } else if (view && /no (?:open )?pull requests? found/i.test(view.stderr)) {
+    await update($, pr, () => ({ state: 'none' }))
+  } else {
+    await update($, pr, current => (current?.state === 'found' ? current : null))
+  }
+}
+
+function parsedPr(stdout: string): PrInfo | null {
+  try {
+    return parsePrView(stdout)
+  } catch {
+    return null
+  }
+}
+
+/** PR mesclada ou fechada não muda mais: o relógio só relê PR aberta, rascunho ou branch ainda sem PR. */
+async function pollPr($: Engine): Promise<void> {
+  const current = await read($, pr)
+  if (current?.state === 'found' && (current.status === 'merged' || current.status === 'closed')) return
+  await refreshPr($)
 }
 
 /** Releitura pedida pela pessoa (aba PR, ↻): o git primeiro, para o `gh` ver a branch atual. */
 async function refreshPrNow($: Engine): Promise<void> {
-  await refreshGit($)
-  await refreshPr($)
+  if (!(await syncGit($))) await refreshPr($)
 }
 
 // $.ui.open vem antes de qualquer await: só uma abertura feita direto no clique conta como pedida
@@ -297,13 +325,14 @@ async function backfillFileLog($: Engine): Promise<void> {
   await learnProjectRoots($, events.map(event => event.path))
 }
 
-async function syncGit($: Engine): Promise<void> {
+/** Relê o git; na troca de branch, relê também a PR. Diz se a PR foi relida. */
+async function syncGit($: Engine): Promise<boolean> {
   const info = await refreshGit($)
-  if (info && info.branch !== lastBranch) {
-    lastBranch = info.branch
-    await update($, pr, () => ({ state: 'loading' }))
-    await refreshPr($)
-  }
+  if (!info || info.branch === lastBranch) return false
+  lastBranch = info.branch
+  await update($, pr, () => ({ state: 'loading' }))
+  await refreshPr($)
+  return true
 }
 
 function ensureTicker($: Engine): void {
@@ -335,7 +364,7 @@ export const register: Register = (on, options) => {
     await refreshUsage($)
     await syncGit($)
     $.clock.every(GIT_EVERY_MS, () => void syncGit($))
-    $.clock.every(PR_EVERY_MS, () => void refreshPr($))
+    $.clock.every(PR_EVERY_MS, () => void pollPr($))
     $.clock.every(60_000, () => void update($, now, () => Date.now()))
     await ensureSideList($)
     return result

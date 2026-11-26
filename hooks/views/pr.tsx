@@ -22,7 +22,7 @@ function checkRow(kit: PrKit, check: PrCheck, index: number, width: number): Ren
   const { Box, Text, Link } = kit
   const name = truncate(check.name, Math.max(8, width - 2 - LINK_ROOM - 1))
   return (
-    <Box key={`check-${index}`} justifyContent="space-between">
+    <Box key={`check-${index}-${check.name}`} justifyContent="space-between">
       <Text>
         <Text color={CHECK_COLOR[check.state]}>{CHECK_GLYPH[check.state]} </Text>
         {check.url ? <Link href={check.url}>{name}</Link> : name}
@@ -38,7 +38,7 @@ function checkRow(kit: PrKit, check: PrCheck, index: number, width: number): Ren
 
 function emptyState(kit: PrKit, pr: PrInfo | null): RenderNode {
   const { Text } = kit
-  if (pr === null) return <Text dimColor>Fora de um repositório git, ou o `gh` não respondeu.</Text>
+  if (pr === null) return <Text dimColor>Fora de um repositório git, ou o gh não respondeu.</Text>
   if (pr.state === 'loading') return <Text dimColor>Buscando a PR…</Text>
   return <Text dimColor>Nenhuma PR para esta branch.</Text>
 }
@@ -120,13 +120,15 @@ export function prView(kit: PrKit, pr: PrInfo | null, options: PrViewOptions): R
         <Box flexDirection="column">
           <Box height={1} />
           <Box columnGap={2}>
-            <Button
-              key="pr-toggle-passing"
-              plain
-              dimColor
-              label={`${options.isPassingShown ? '▾' : '▸'} ${CHECK_GLYPH.pass} ${counts.pass} com sucesso`}
-              onPress={options.onTogglePassing}
-            />
+            {counts.pass > 0 && (
+              <Button
+                key="pr-toggle-passing"
+                plain
+                dimColor
+                label={`${options.isPassingShown ? '▾' : '▸'} ${CHECK_GLYPH.pass} ${counts.pass} com sucesso`}
+                onPress={options.onTogglePassing}
+              />
+            )}
             {counts.fail > 0 && <Text color="error">{`${CHECK_GLYPH.fail} ${counts.fail} com falha`}</Text>}
             {counts.pending > 0 && <Text color="warning">{`${CHECK_GLYPH.pending} ${counts.pending}`}</Text>}
           </Box>

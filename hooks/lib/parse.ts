@@ -1,3 +1,4 @@
+import { cleanText } from './format'
 import type { CheckState, GitInfo, PrCheck, PrInfo, PrStatus } from '../../types'
 
 export function parseGitStatus(porcelain: string, toplevel: string): GitInfo {
@@ -46,9 +47,14 @@ function checkState(item: RollupItem): CheckState {
   return 'pending'
 }
 
+/** O link de um StatusContext é escrito por apps de fora: só `https:` vira link. */
+function httpsUrl(value: string | null | undefined): string | undefined {
+  return value && /^https:\/\//i.test(value) ? value : undefined
+}
+
 function prCheck(item: RollupItem): PrCheck {
-  const url = item.detailsUrl || item.targetUrl
-  return { name: item.name || item.context || '(sem nome)', state: checkState(item), ...(url ? { url } : {}) }
+  const url = httpsUrl(item.detailsUrl) ?? httpsUrl(item.targetUrl)
+  return { name: cleanText(item.name || item.context || '(sem nome)'), state: checkState(item), ...(url ? { url } : {}) }
 }
 
 function prStatus(state: string | undefined, isDraft: boolean | undefined): PrStatus {
@@ -74,8 +80,8 @@ export function parsePrView(json: string): PrInfo {
   return {
     state: 'found',
     number: data.number,
-    title: data.title ?? '',
-    url: data.url ?? '',
+    title: cleanText(data.title ?? ''),
+    url: httpsUrl(data.url) ?? '',
     status: prStatus(data.state, data.isDraft),
     updatedAt: data.updatedAt ?? '',
     isMergeable: data.mergeable === 'MERGEABLE' ? true : data.mergeable === 'CONFLICTING' ? false : null,
