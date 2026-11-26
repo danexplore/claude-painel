@@ -80,3 +80,11 @@ const CONTROL = /[\x00-\x08\x0b-\x1f\x7f]/g
 export function cleanText(text: string): string {
   return text.replace(ANSI, '').replace(/\r\n?/g, '\n').replace(CONTROL, '')
 }
+
+/** `26/11/2026, 17:40` no fuso local; vazio se a data não for válida. */
+export function dateTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}, ${clockTime(date.getTime())}`
+}

@@ -1,4 +1,4 @@
-import type { CheckState, GitInfo, PrInfo } from '../../types'
+import type { CheckState, GitInfo, PrCheck, PrInfo, PrStatus } from '../../types'
 
 export function parseGitStatus(porcelain: string, toplevel: string): GitInfo {
   let branch = '(detached)'
@@ -22,7 +22,19 @@ export function parseGitStatus(porcelain: string, toplevel: string): GitInfo {
   return { repo, branch, changed, ahead, behind }
 }
 
-type RollupItem = { conclusion?: string | null; status?: string | null; state?: string | null }
+/** Campos pedidos ao `gh pr view --json`; `parsePrView` lê exatamente estes. */
+export const PR_VIEW_FIELDS = 'number,title,url,state,isDraft,updatedAt,mergeable,reviewDecision,statusCheckRollup'
+
+/** Um item do `statusCheckRollup`: `CheckRun` (Actions) traz `name`/`conclusion`, `StatusContext` traz `context`/`state`. */
+type RollupItem = {
+  name?: string | null
+  context?: string | null
+  conclusion?: string | null
+  status?: string | null
+  state?: string | null
+  detailsUrl?: string | null
+  targetUrl?: string | null
+}
 
 const FAILING = new Set(['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE'])
 const PASSING = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED'])
@@ -34,18 +46,40 @@ function checkState(item: RollupItem): CheckState {
   return 'pending'
 }
 
+function prCheck(item: RollupItem): PrCheck {
+  const url = item.detailsUrl || item.targetUrl
+  return { name: item.name || item.context || '(sem nome)', state: checkState(item), ...(url ? { url } : {}) }
+}
+
+function prStatus(state: string | undefined, isDraft: boolean | undefined): PrStatus {
+  if (state === 'MERGED') return 'merged'
+  if (state === 'CLOSED') return 'closed'
+  return isDraft ? 'draft' : 'open'
+}
+
 export function parsePrView(json: string): PrInfo {
   const data = JSON.parse(json) as {
     number: number
+    title?: string
+    url?: string
+    state?: string
+    isDraft?: boolean
+    updatedAt?: string
+    mergeable?: string
     reviewDecision?: string | null
     statusCheckRollup?: RollupItem[] | null
   }
   const review =
     data.reviewDecision === 'APPROVED' ? 'approved' : data.reviewDecision === 'CHANGES_REQUESTED' ? 'changes' : null
   return {
-    state: 'open',
+    state: 'found',
     number: data.number,
-    checks: (data.statusCheckRollup ?? []).map(checkState),
+    title: data.title ?? '',
+    url: data.url ?? '',
+    status: prStatus(data.state, data.isDraft),
+    updatedAt: data.updatedAt ?? '',
+    isMergeable: data.mergeable === 'MERGEABLE' ? true : data.mergeable === 'CONFLICTING' ? false : null,
+    checks: (data.statusCheckRollup ?? []).map(prCheck),
     review,
   }
 }

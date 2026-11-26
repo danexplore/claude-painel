@@ -31,11 +31,12 @@ import {
   type Piece,
   type Tone,
 } from './lib/layout'
-import { parseGitStatus, parsePrView } from './lib/parse'
+import { PR_VIEW_FIELDS, parseGitStatus, parsePrView } from './lib/parse'
 import { changesBetween, markTree, type Run } from './lib/worktree'
 import { changesStat, filesChanged, groupByProject, mergeFileEvents, projectPath, projectRootOf } from './lib/files'
 import { argumentHint, fitMcpRow, resultHint } from './lib/mcp-hint'
 import { coloredStat, entryDetail, fileDiff, withMcpFields } from './views/detail'
+import { prView } from './views/pr'
 
 const PANE = 'painel'
 const MAX_ACTIVITY = 200
@@ -61,7 +62,8 @@ const activity = atom({ plugin: 'painel', key: 'activity' } as const, [] as Acti
 const unseenCritical = atom({ plugin: 'painel', key: 'unseenCritical' } as const, [] as string[])
 const tasks = atom({ plugin: 'painel', key: 'tasks' } as const, [] as Task[])
 const git = atom({ plugin: 'painel', key: 'git' } as const, null as GitInfo | null)
-const pr = atom({ plugin: 'painel', key: 'pr' } as const, null as PrInfo | null)
+const pr = atom({ plugin: 'painel', key: 'pr' } as const, null as PrInfo | null, { shape: 'pr-2' })
+const prShowPassing = atom({ plugin: 'painel', key: 'prShowPassing' } as const, false)
 const usage = atom({ plugin: 'painel', key: 'usage' } as const, null as UsageInfo | null)
 const startedAt = atom({ plugin: 'painel', key: 'startedAt' } as const, 0)
 const turns = atom({ plugin: 'painel', key: 'turns' } as const, 0)
@@ -165,7 +167,7 @@ async function refreshPr($: Engine): Promise<void> {
     return
   }
   try {
-    const view = await $.process.run(['gh', 'pr', 'view', '--json', 'number,reviewDecision,statusCheckRollup'], {
+    const view = await $.process.run(['gh', 'pr', 'view', '--json', PR_VIEW_FIELDS], {
       timeoutMs: 15_000,
     })
     if (view.exitCode === 0) {
@@ -177,6 +179,12 @@ async function refreshPr($: Engine): Promise<void> {
   } catch {
     await update($, pr, () => null)
   }
+}
+
+/** Releitura pedida pela pessoa (aba PR, ↻): o git primeiro, para o `gh` ver a branch atual. */
+async function refreshPrNow($: Engine): Promise<void> {
+  await refreshGit($)
+  await refreshPr($)
 }
 
 // $.ui.open vem antes de qualquer await: só uma abertura feita direto no clique conta como pedida
@@ -530,13 +538,13 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text, Button, Link } = $.ui.resolve(e)
     const width = e.props.bodyColumns - 1
     const currentTime = (await read($, now)) || Date.now()
 
     const renderPiece = (piece: Piece, key: string) => (
       <Text key={key} bold={piece.bold} {...TONE_STYLE[piece.tone ?? 'normal']}>
-        {piece.text}
+        {piece.href ? <Link href={piece.href}>{piece.text}</Link> : piece.text}
       </Text>
     )
 
@@ -641,8 +649,10 @@ export const register: Register = (on, options) => {
   // Um erro no desenho deixaria o painel em branco; aqui ele aparece na tela, com o que falhou.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     try {
-    const { Box, Text, Button, Code, Markdown } = $.ui.resolve(e)
+    const { Box, Text, Button, Code, Markdown, Link } = $.ui.resolve(e)
     const kit = { Box, Text, Button, Code, Markdown }
+    const prInfo = await read($, pr)
+    const prLabel = prInfo?.state === 'found' ? `PR #${prInfo.number}` : 'PR'
     const width = Math.max(16, e.props.bodyColumns - 1)
     const list = await read($, activity)
     const taskList = await read($, tasks)
@@ -712,7 +722,7 @@ export const register: Register = (on, options) => {
     }
 
     // O cabeçalho completo só cabe se sobrar folga entre as abas e o botão do chat; senão fica com rótulos curtos e o chat desce.
-    const fullHeaderLabels = ['«', 'Atividade', `Arquivos ${changedFiles.length}`, ...(taskList.length > 0 ? [`Tarefas ${taskList.length}/${taskList.length}`] : [])]
+    const fullHeaderLabels = ['«', 'Atividade', `Arquivos ${changedFiles.length}`, ...(taskList.length > 0 ? [`Tarefas ${taskList.length}/${taskList.length}`] : []), prLabel]
     const fullHeaderWidth =
       fullHeaderLabels.reduce((sum, label) => sum + label.length + HOTKEY_PREFIX, 0) +
       HEADER_GAP * (fullHeaderLabels.length - 1) +
@@ -744,7 +754,12 @@ export const register: Register = (on, options) => {
         hotkey={hotkey}
         dimColor={currentTab !== key ? true : undefined}
         label={label}
-        onPress={() => void update($, tab, () => key)}
+        onPress={() =>
+          void (async () => {
+            await update($, tab, () => key)
+            if (key === 'pr') await refreshPrNow($)
+          })()
+        }
       />
     )
     const chatButton = (
@@ -764,6 +779,7 @@ export const register: Register = (on, options) => {
           {tabButton('activity', '1', isCompact ? 'Ativ' : 'Atividade')}
           {tabButton('files', '2', `${isCompact ? 'Arq' : 'Arquivos'} ${changedFiles.length}`)}
           {taskList.length > 0 && tabButton('tasks', '3', `${isCompact ? 'Tar' : 'Tarefas'} ${taskList.length - openTasks.length}/${taskList.length}`)}
+          {tabButton('pr', '4', isCompact ? 'PR' : prLabel)}
         </Box>
         {!isCompact && chatButton}
       </Box>
@@ -867,6 +883,21 @@ export const register: Register = (on, options) => {
               })}
               </Box>
             )
+          })}
+        </Box>
+      )
+    }
+
+    if (currentTab === 'pr') {
+      return (
+        <Box flexDirection="column">
+          {pinnedHeader}
+          {rule}
+          {prView({ Box, Text, Button, Link }, prInfo, {
+            width,
+            isPassingShown: await read($, prShowPassing),
+            onRefresh: () => void refreshPrNow($),
+            onTogglePassing: () => void update($, prShowPassing, shown => !shown),
           })}
         </Box>
       )

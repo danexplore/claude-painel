@@ -58,13 +58,24 @@ export type GitInfo = {
 
 export type CheckState = 'pass' | 'fail' | 'pending'
 
+export type PrCheck = { name: string; state: CheckState; url?: string }
+
+export type PrStatus = 'open' | 'draft' | 'merged' | 'closed'
+
 export type PrInfo =
   | { state: 'loading' }
   | { state: 'none' }
   | {
-      state: 'open'
+      state: 'found'
       number: number
-      checks: CheckState[]
+      title: string
+      url: string
+      status: PrStatus
+      /** ISO 8601, como o `gh` devolve. */
+      updatedAt: string
+      /** `null` enquanto o GitHub ainda calcula. */
+      isMergeable: boolean | null
+      checks: PrCheck[]
       review: 'approved' | 'changes' | null
     }
 
@@ -77,7 +88,7 @@ export type UsageInfo = {
   limits: LimitReading[]
 }
 
-export type PaneTab = 'activity' | 'tasks' | 'files'
+export type PaneTab = 'activity' | 'tasks' | 'files' | 'pr'
 
 export type ActivityFilter = 'all' | 'edit' | 'action' | 'read' | 'critical'
 
@@ -90,7 +101,10 @@ declare module 'claude-code' {
       unseenCritical: string[]
       tasks: Task[]
       git: GitInfo | null
-      pr: PrInfo | null
+      /** Com forma: um valor gravado pela versão anterior (sem título nem checks nomeados) volta a `null`. */
+      pr: Shaped<PrInfo | null>
+      /** Na aba PR, mostra também os checks que passaram. */
+      prShowPassing: boolean
       usage: UsageInfo | null
       startedAt: number
       scrollTick: number
