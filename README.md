@@ -24,7 +24,7 @@ todos 20  ✎ edição 12  ▶ ação 8  leitura ○  ⚠ 1
 - Duas linhas. A segunda junta o que o Claude fez no pedido atual (`4✎ 14▶ 5· ◇1`) com os últimos comandos; clicar abre a chamada.
 - Contexto usado (`usado/total %`), limites de 5h e 7d com barra. A cor muda quando você está gastando mais rápido que o tempo passa.
 - Repositório, branch, arquivos modificados, à frente/atrás da origem.
-- PR da branch com os checks do CI e a revisão (via `gh`).
+- PR da branch com os checks do CI e a revisão (via `gh`). O `PR #N` é link: ctrl+clique abre a PR no navegador. Mesclada, fechada ou rascunho aparece ao lado.
 - Com o [secrets-veil](https://github.com/yonatangross/orchestkit) instalado, o rodapé dele vira um `◈ N` aqui (a máscara continua igual).
 - Contador de comandos críticos não vistos (`rm -rf`, `push --force`, `reset --hard`, `supabase db push`, `DROP`/`TRUNCATE`, `prod`…).
 
@@ -37,7 +37,8 @@ todos 20  ✎ edição 12  ▶ ação 8  leitura ○  ⚠ 1
 - `execute_sql` do Supabase: query com cores e resultado como tabela ou registros, sem o envelope.
 - Write mostra o conteúdo com cores; `.md` aparece renderizado.
 - `t` escolhe o que aparece na conversa: nada, só o que mudou arquivo (Edit, Write e Bash como `sed -i`), ou tudo.
-- Abas **Atividade**, **Arquivos** (tudo que foi editado na sessão, agrupado por projeto, caminhos a partir da raiz) e **Tarefas**.
+- Abas **Atividade**, **Arquivos** (tudo que foi editado na sessão, agrupado por projeto, caminhos a partir da raiz), **Tarefas** e **PR** (`4`).
+- Aba **PR**: número (link), estado, título, quando foi atualizada, resumo das verificações, revisão, conflito com a base e cada check, falhas primeiro; ctrl+clique no nome ou no `↗` abre o job. Os que passaram ficam recolhidos atrás de `▸ ✓ N com sucesso`. `↻` (ou `u`) relê na hora; abrir a aba também relê.
 - `«` (ou `r`) recolhe a lista; `a: atividade` na faixa reabre.
 
 ## Instalar

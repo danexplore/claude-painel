@@ -1,4 +1,4 @@
-import type { Activity, ActivityCategory, ActivityFilter, GitInfo, PaneTab, PrInfo, RequestGroup, SubAgent, Task, UsageInfo } from '../../types'
+import type { Activity, ActivityCategory, ActivityFilter, CheckState, GitInfo, PaneTab, PrCheck, PrInfo, PrStatus, RequestGroup, SubAgent, Task, UsageInfo } from '../../types'
 import {
   LIMIT_WINDOWS,
   bar,
@@ -14,7 +14,8 @@ import {
 
 export type Tone = 'normal' | 'dim' | 'warn' | 'high' | 'mcp' | 'cli'
 
-export type Piece = { text: string; tone?: Tone; bold?: boolean }
+/** `href` desenha o pedaço como link (OSC 8 no terminal: ctrl+clique abre). */
+export type Piece = { text: string; tone?: Tone; bold?: boolean; href?: string }
 
 export type PaneTarget = { tab: PaneTab; filter?: ActivityFilter; expand?: string }
 
@@ -73,7 +74,9 @@ export function iconFor(activity: Activity): Piece {
   return { text: CATEGORY_ICON.action, tone: 'cli' }
 }
 
-const CHECK_GLYPH = { pass: '✓', fail: '✗', pending: '⏳' } as const
+export const CHECK_GLYPH = { pass: '✓', fail: '✗', pending: '⏳' } as const
+
+export const PR_STATUS_LABEL: Record<PrStatus, string> = { open: 'aberta', draft: 'rascunho', merged: 'mesclada', closed: 'fechada' }
 const MAX_CHECK_GLYPHS = 5
 
 function levelTone(level: Level): Tone {
@@ -157,18 +160,38 @@ function gitSegment(git: GitInfo | null): Segment[] {
   return [{ id: 'git', priority: KEEP, pieces }]
 }
 
+function worstCheck(states: CheckState[]): CheckState | null {
+  if (states.length === 0) return null
+  return states.includes('fail') ? 'fail' : states.includes('pending') ? 'pending' : 'pass'
+}
+
+export type CheckCounts = Record<CheckState, number>
+
+/** Checks na ordem da aba PR: falhas, depois pendentes, depois os que passaram; o nome desempata. */
+export function sortedChecks(checks: PrCheck[]): PrCheck[] {
+  const rank: CheckCounts = { fail: 0, pending: 1, pass: 2 }
+  return [...checks].sort((a, b) => rank[a.state] - rank[b.state] || a.name.localeCompare(b.name))
+}
+
+export function countChecks(checks: PrCheck[]): CheckCounts {
+  const counts: CheckCounts = { fail: 0, pending: 0, pass: 0 }
+  for (const check of checks) counts[check.state] += 1
+  return counts
+}
+
 function prSegment(pr: PrInfo | null): Segment[] {
   if (!pr) return []
   if (pr.state === 'loading') return [{ id: 'pr', priority: 2, pieces: [{ text: 'PR …', tone: 'dim' }] }]
   if (pr.state === 'none') return [{ id: 'pr', priority: 2, pieces: [{ text: 'sem PR', tone: 'dim' }] }]
 
-  const shown = pr.checks.slice(0, MAX_CHECK_GLYPHS)
+  const states = pr.checks.map(check => check.state)
+  const shown = states.slice(0, MAX_CHECK_GLYPHS)
   const checkPieces: Piece[] = shown.map(check => ({
     text: CHECK_GLYPH[check],
     tone: check === 'fail' ? 'high' : 'dim',
   }))
-  if (pr.checks.length > MAX_CHECK_GLYPHS) {
-    checkPieces.push({ text: `+${pr.checks.length - MAX_CHECK_GLYPHS}`, tone: 'dim' })
+  if (states.length > MAX_CHECK_GLYPHS) {
+    checkPieces.push({ text: `+${states.length - MAX_CHECK_GLYPHS}`, tone: 'dim' })
   }
   const reviewPieces: Piece[] =
     pr.review === 'approved'
@@ -176,17 +199,18 @@ function prSegment(pr: PrInfo | null): Segment[] {
       : pr.review === 'changes'
         ? [{ text: ' mudanças', tone: 'warn' }]
         : []
-  const worst = pr.checks.includes('fail') ? 'fail' : pr.checks.includes('pending') ? 'pending' : 'pass'
-  const label = { text: `PR #${pr.number}` }
+  const worst = worstCheck(states)
+  const label: Piece = { text: `PR #${pr.number}`, ...(pr.url ? { href: pr.url } : {}) }
+  const statusPieces: Piece[] = pr.status === 'open' ? [] : [{ text: ` ${PR_STATUS_LABEL[pr.status]}`, tone: 'dim' }]
 
   return [
     {
       id: 'pr',
       priority: 2,
-      pieces: [label, ...(checkPieces.length ? [{ text: ' ' }, ...checkPieces] : []), ...reviewPieces],
-      compact: pr.checks.length
+      pieces: [label, ...statusPieces, ...(checkPieces.length ? [{ text: ' ' }, ...checkPieces] : []), ...reviewPieces],
+      compact: worst
         ? [label, { text: ` ${CHECK_GLYPH[worst]}`, tone: worst === 'fail' ? 'high' : 'dim' }]
-        : [label],
+        : [label, ...statusPieces],
     },
   ]
 }

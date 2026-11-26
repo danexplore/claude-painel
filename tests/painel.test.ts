@@ -1,8 +1,8 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { agentIdFromOutput, classifyShell, classifyToolCall, gitNote, isBookkeeping, isReadOnlyShell, patchDiff, patchStat, settleCategory, shortenPaths, stripRtk } from '../hooks/lib/classify'
-import { bar, cleanText, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
-import { activityItems, arrangeWithAgents, fitGroupLabel, categoryOf, countCategories, countsLabel, currentWork, iconFor, isHiddenRead, fitSegments, workLabel, compactWorkLabel, maskedCount, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
+import { bar, cleanText, dateTime, compactTokens, duration, limitLevel, truncate } from '../hooks/lib/format'
+import { activityItems, countChecks, sortedChecks, arrangeWithAgents, fitGroupLabel, categoryOf, countCategories, countsLabel, currentWork, iconFor, isHiddenRead, fitSegments, workLabel, compactWorkLabel, maskedCount, groupByRequest, groupRepeats, matchesFilter, statusSegments, type Segment } from '../hooks/lib/layout'
 import { argumentHint, fitMcpLabel, fitMcpRow, resultHint } from '../hooks/lib/mcp-hint'
 import { jsonSummary, readMcpOutput, requestArguments, splitRequest, tableLayout } from '../hooks/lib/mcp-view'
 import { withMcpFields } from '../hooks/views/detail'
@@ -239,11 +239,69 @@ describe('leitura de git e PR', () => {
       ],
     })
     expect(parsePrView(json)).toEqual({
-      state: 'open',
+      state: 'found',
       number: 412,
-      checks: ['pass', 'fail', 'pending', 'pending'],
+      title: '',
+      url: '',
+      status: 'open',
+      updatedAt: '',
+      isMergeable: null,
+      checks: ['pass', 'fail', 'pending', 'pending'].map(state => ({ name: '(sem nome)', state })),
       review: 'approved',
     })
+  })
+
+  test('gh pr view lê nome e link de CheckRun e StatusContext', async () => {
+    const json = JSON.stringify({
+      number: 90,
+      statusCheckRollup: [
+        { __typename: 'CheckRun', name: 'typecheck', conclusion: 'SUCCESS', status: 'COMPLETED', detailsUrl: 'https://gh/job/1' },
+        { __typename: 'StatusContext', context: 'vercel', state: 'PENDING', targetUrl: 'https://vercel/x' },
+      ],
+    })
+    const info = parsePrView(json)
+    expect(info.state === 'found' && info.checks).toEqual([
+      { name: 'typecheck', state: 'pass', url: 'https://gh/job/1' },
+      { name: 'vercel', state: 'pending', url: 'https://vercel/x' },
+    ])
+  })
+
+  test('link de check que não é https vira texto', async () => {
+    const info = parsePrView(JSON.stringify({ number: 1, statusCheckRollup: [{ context: 'ci', state: 'SUCCESS', targetUrl: 'javascript:alert(1)' }] }))
+    expect(info.state === 'found' && info.checks).toEqual([{ name: 'ci', state: 'pass' }])
+  })
+
+  test('gh pr view distingue mesclada, rascunho e conflito', async () => {
+    const status = (fields: Record<string, unknown>) => {
+      const info = parsePrView(JSON.stringify({ number: 1, ...fields }))
+      return info.state === 'found' ? [info.status, info.isMergeable] : null
+    }
+    expect([
+      status({ state: 'MERGED', mergeable: 'UNKNOWN' }),
+      status({ state: 'OPEN', isDraft: true, mergeable: 'CONFLICTING' }),
+      status({ state: 'OPEN', isDraft: false, mergeable: 'MERGEABLE' }),
+    ]).toEqual([
+      ['merged', null],
+      ['draft', false],
+      ['open', true],
+    ])
+  })
+})
+
+describe('checks da aba PR', () => {
+  test('data inválida ou vazia não vira texto', async () => {
+    expect([dateTime(''), dateTime('ontem')]).toEqual(['', ''])
+  })
+
+  const check = (name: string, state: 'pass' | 'fail' | 'pending') => ({ name, state })
+
+  test('falhas primeiro, depois pendentes, depois os que passaram', async () => {
+    const ordered = sortedChecks([check('b', 'pass'), check('z', 'fail'), check('a', 'pass'), check('p', 'pending'), check('c', 'fail')])
+    expect(ordered.map(one => one.name)).toEqual(['c', 'z', 'p', 'a', 'b'])
+  })
+
+  test('contagem por estado', async () => {
+    expect(countChecks([check('a', 'pass'), check('b', 'fail'), check('c', 'pass')])).toEqual({ pass: 2, fail: 1, pending: 0 })
   })
 })
 
@@ -251,7 +309,20 @@ describe('layout da faixa', () => {
   const data = {
     usage: { contextTokens: 142_000, contextWindow: 1_000_000, contextPercent: 14, limits: [] },
     git: { repo: 'app', branch: 'feat/x', changed: 3, ahead: 1, behind: 0 },
-    pr: { state: 'open' as const, number: 412, checks: ['pass' as const, 'fail' as const], review: null },
+    pr: {
+      state: 'found' as const,
+      number: 412,
+      title: 'feat: x',
+      url: 'https://github.com/o/r/pull/412',
+      status: 'open' as const,
+      updatedAt: '',
+      isMergeable: true,
+      checks: [
+        { name: 'a', state: 'pass' as const },
+        { name: 'b', state: 'fail' as const },
+      ],
+      review: null,
+    },
     tasks: [{ id: '1', subject: 'a', status: 'completed' as const }],
     unseenCritical: 1,
     startedAt: 1,
@@ -260,6 +331,16 @@ describe('layout da faixa', () => {
   }
 
   const ids = (segments: Segment[]) => segments.map(segment => segment.id)
+
+  test('número da PR é link para a PR', async () => {
+    const segment = statusSegments(data).find(one => one.id === 'pr')
+    expect(segment?.pieces[0]).toEqual({ text: 'PR #412', href: 'https://github.com/o/r/pull/412' })
+  })
+
+  test('PR mesclada diz isso na faixa', async () => {
+    const segment = statusSegments({ ...data, pr: { ...data.pr, status: 'merged' as const, checks: [] } }).find(one => one.id === 'pr')
+    expect(segment?.pieces.map(piece => piece.text).join('')).toBe('PR #412 mesclada')
+  })
 
   test('com espaço, mostra tudo', async () => {
     expect(ids(fitSegments(statusSegments(data), 200))).toEqual(['context', 'git', 'pr', 'tasks', 'critical', 'clock'])
@@ -336,6 +417,7 @@ describe('layout da faixa', () => {
 
 const BAND_PROPS = {
   hasSurvey: false,
+  isCollapsed: false,
   isWorking: false,
   maxRows: 10,
   bodyColumns: 120,
@@ -1252,4 +1334,89 @@ describe('guarda de limite de uso', () => {
     expect(guardsPrompt({ origin: { kind: 'scheduled-trigger' } })).toBe(false)
     expect(guardsPrompt({ origin: { kind: 'composer' }, isMeta: true })).toBe(false)
   })
+})
+
+const PR_JSON = JSON.stringify({
+  number: 90,
+  title: 'fix(disparos): Fase 1',
+  url: 'https://github.com/o/r/pull/90',
+  state: 'OPEN',
+  isDraft: false,
+  updatedAt: '2026-11-26T20:40:36Z',
+  mergeable: 'MERGEABLE',
+  reviewDecision: '',
+  statusCheckRollup: [
+    { name: 'typecheck', conclusion: 'SUCCESS', status: 'COMPLETED', detailsUrl: 'https://github.com/o/r/actions/runs/1/job/1' },
+    { name: 'vitest (api 2/4)', conclusion: 'FAILURE', status: 'COMPLETED', detailsUrl: 'https://github.com/o/r/actions/runs/1/job/2' },
+  ],
+})
+
+/** Responde ao git e ao `gh` como um repositório com a PR do `json` aberta; `ghFails` simula a rede caída. */
+function fakeRepo(json: string, gh: { ghFails?: boolean } = {}) {
+  return (_$: unknown, e: { argv: readonly string[] }) => {
+    const [command, sub] = e.argv
+    if (command === 'gh' && gh.ghFails) return { value: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com' } }
+    const stdout = command === 'gh' ? json : sub === 'rev-parse' ? '/r/app\n' : '# branch.head fix/x\n'
+    return { value: { exitCode: 0, stdout, stderr: '' } }
+  }
+}
+
+const fakeGh = fakeRepo(PR_JSON)
+
+test('aba PR mostra estado, título e checks com falha primeiro, com link para o job', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('process.run', fakeGh as never)
+  const pane = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await pane.press({ key: 'tab-pr' })
+  const links = await pane.findAll({ type: 'Link' })
+  const shown = [
+    (await pane.find({ text: /^ABERTA$/ })) !== undefined,
+    (await pane.find({ text: /fix\(disparos\): Fase 1/ })) !== undefined,
+    (await pane.find({ text: /1 verificação com falha/ })) !== undefined,
+    (await pane.find({ type: 'Link', text: /typecheck$/ })) !== undefined,
+    links.some(link => link.props.href === 'https://github.com/o/r/actions/runs/1/job/2'),
+  ]
+  expect(shown).toEqual([true, true, true, false, true])
+  await pane.press({ key: 'pr-toggle-passing' })
+  expect((await pane.find({ type: 'Link', text: /typecheck$/ })) !== undefined).toBe(true)
+  await pane.unmount()
+})
+
+test('faixa desenha o número da PR como link para a PR', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('process.run', fakeGh as never)
+  const pane = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await pane.press({ key: 'tab-pr' })
+  await pane.unmount()
+  const band = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+  const link = await band.find({ type: 'Link', text: 'PR #90' })
+  expect(link?.props.href).toBe('https://github.com/o/r/pull/90')
+  await band.unmount()
+})
+
+test('falha passageira do gh mantém a PR que já estava na tela', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  const network = { ghFails: false }
+  on('process.run', fakeRepo(PR_JSON, network) as never)
+  const pane = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await pane.press({ key: 'tab-pr' })
+  network.ghFails = true
+  await pane.press({ key: 'pr-refresh' })
+  expect((await pane.find({ text: /fix\(disparos\): Fase 1/ })) !== undefined).toBe(true)
+  await pane.unmount()
+})
+
+test('PR sem checks não mostra resumo nem botão de checks', async ($, on) => {
+  on('ui.render', () => ({ type: 'engine' as const, ref: 0 }))
+  on('process.run', fakeRepo(JSON.stringify({ number: 7, title: 't', url: 'https://github.com/o/r/pull/7', state: 'MERGED' })) as never)
+  const pane = await $.ui.mount({ plugin: 'painel', surface: 'terminal', component: 'Pane', requestId: 'painel', props: PANE_PROPS } as never)
+  await pane.press({ key: 'tab-pr' })
+  const found = [
+    (await pane.find({ text: /^MESCLADA$/ })) !== undefined,
+    (await pane.find({ key: 'pr-toggle-passing' })) !== undefined,
+    (await pane.find({ text: /verificaç/ })) !== undefined,
+    (await pane.find({ text: /conflito/ })) !== undefined,
+  ]
+  expect(found).toEqual([true, false, false, false])
+  await pane.unmount()
 })
